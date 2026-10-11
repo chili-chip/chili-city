@@ -28,7 +28,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
   - **Commercial** grows when there are enough residents to shop.
   - **Industrial** grows when there are enough residents to work, and pollutes the tiles around it: the bigger the factory, the further the smog reaches. Homes in smog stop growing, and in heavy smog they shrink.
   - **Parks** raise land value around them. Homes on high land value grow faster.
-  - Press **X** to look at the pollution or land value overlay.
+  - Press **X** to look at the pollution, land value or crime overlay.
 - The **R C I** meter in the bottom-left corner shows demand: a green bar up means the city wants more of that zone, a red bar down means it has too much.
 - You start with **$5000**. Building costs money:
 
@@ -40,10 +40,12 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
   | Power plant | $1500 |
   | Park | $20 |
   | Fire station | $500 |
+  | Police station | $500 |
   | Bulldoze | $5 |
 
-- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile, $50 per power plant and $20 per fire station.
+- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile, $50 per power plant and $20 per fire or police station.
 - Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Disasters can be turned off in the pause menu.
+- **Crime** grows where homes and shops are crowded together. Homes don't grow in high crime, and crime lowers land value. A **police station** cuts crime to a quarter within 6 tiles.
 - The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
 - The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast), open the budget, or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
@@ -58,7 +60,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 | Paint with tool (roads, zones, lines...) | hold A and move | hold Z and move |
 | Next tool | B | X |
 | Stats screen | Y | V |
-| Overlay: pollution, land value, off | X | C |
+| Overlay: pollution, land value, crime, off | X | C |
 | Pause menu (speed, save and quit) | MENU | Esc |
 
 ## Building
@@ -103,6 +105,7 @@ All graphics are 8×8 sprites in `assets/tiles.png` (8 sprites per row):
 | 0 | grass |
 | 16–31 | road, picked by which neighbours are roads (north 1, east 2, south 4, west 8) |
 | 32–35 | residential, levels 0–3 |
+| 36 | police station |
 | 40–43 | commercial, levels 0–3 |
 | 48–51 | industrial, levels 0–3 |
 | 56–71 | power line, picked by which neighbours carry power (same bits as roads) |
