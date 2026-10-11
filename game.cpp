@@ -20,6 +20,8 @@ enum Tile : uint8_t {
     TILE_RESIDENTIAL,
     TILE_COMMERCIAL,
     TILE_INDUSTRIAL,
+    TILE_POWER_LINE,
+    TILE_POWER_PLANT, // 2x2; level[][] holds which quarter (0..3)
 };
 
 // Where each tile's picture is in assets/tiles.png. The sheet is 8 sprites
@@ -29,6 +31,9 @@ constexpr int SPRITE_ROAD = 16;        // + which neighbours are roads (0..15)
 constexpr int SPRITE_RESIDENTIAL = 32; // + level (0..3)
 constexpr int SPRITE_COMMERCIAL = 40;  // + level
 constexpr int SPRITE_INDUSTRIAL = 48;  // + level
+constexpr int SPRITE_POWER_LINE = 56;  // + which neighbours carry power (0..15)
+constexpr int SPRITE_POWER_PLANT = 72; // + quarter: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+constexpr int SPRITE_NO_POWER = 76;    // bolt drawn over zones without power
 
 // What pressing A does. B switches to the next tool.
 enum Tool {
@@ -36,6 +41,8 @@ enum Tool {
     TOOL_RESIDENTIAL,
     TOOL_COMMERCIAL,
     TOOL_INDUSTRIAL,
+    TOOL_POWER_LINE,
+    TOOL_POWER_PLANT,
     TOOL_BULLDOZER,
     TOOL_COUNT, // number of tools, keep last
 };
@@ -46,6 +53,8 @@ const int tool_costs[TOOL_COUNT] = {
     50, // residential zone
     50, // commercial zone
     50, // industrial zone
+    5,  // power line
+    1500, // power plant
     5,  // bulldozer
 };
 
@@ -54,6 +63,8 @@ const char *tool_names[TOOL_COUNT] = {
     "RES ZONE",
     "COM ZONE",
     "IND ZONE",
+    "POWER LINE",
+    "PLANT",
     "BULLDOZE",
 };
 
@@ -65,6 +76,9 @@ uint8_t map[MAP_H][MAP_W];
 // How built up each zone tile is: 0 = empty lot, MAX_LEVEL = dense.
 constexpr int MAX_LEVEL = 3;
 uint8_t level[MAP_H][MAP_W];
+
+// Which tiles get electricity, worked out by update_power().
+bool powered[MAP_H][MAP_W];
 
 // People living on one residential level.
 constexpr int PEOPLE_PER_LEVEL = 20;
@@ -146,6 +160,56 @@ int road_mask(int x, int y) {
     return mask;
 }
 
+bool is_zone(uint8_t tile) {
+    return tile == TILE_RESIDENTIAL || tile == TILE_COMMERCIAL || tile == TILE_INDUSTRIAL;
+}
+
+// Power flows through power lines, plants and zones (zones pass it on to
+// the zone next door), but not through roads or grass.
+bool carries_power(uint8_t tile) {
+    return tile == TILE_POWER_LINE || tile == TILE_POWER_PLANT || is_zone(tile);
+}
+
+// Which neighbours carry power, as bits like road_mask, so a power line
+// sprite connects to them.
+int power_mask(int x, int y) {
+    int mask = 0;
+    if(y > 0         && carries_power(map[y - 1][x])) mask |= 1;
+    if(x < MAP_W - 1 && carries_power(map[y][x + 1])) mask |= 2;
+    if(y < MAP_H - 1 && carries_power(map[y + 1][x])) mask |= 4;
+    if(x > 0         && carries_power(map[y][x - 1])) mask |= 8;
+    return mask;
+}
+
+// Flood fill from every power plant through connected tiles that carry
+// power. Whatever the fill reaches is powered.
+void update_power() {
+    // tiles still to visit; a tile is only added once, so MAP_W * MAP_H is enough
+    static Point todo[MAP_W * MAP_H];
+    int count = 0;
+
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            powered[y][x] = map[y][x] == TILE_POWER_PLANT;
+            if(powered[y][x]) {
+                todo[count++] = Point(x, y);
+            }
+        }
+    }
+
+    const Point steps[4] = {Point(0, -1), Point(1, 0), Point(0, 1), Point(-1, 0)};
+    while(count > 0) {
+        Point p = todo[--count];
+        for(auto &step : steps) {
+            Point n = p + step;
+            if(n.x < 0 || n.y < 0 || n.x >= MAP_W || n.y >= MAP_H) continue;
+            if(powered[n.y][n.x] || !carries_power(map[n.y][n.x])) continue;
+            powered[n.y][n.x] = true;
+            todo[count++] = n;
+        }
+    }
+}
+
 // Recounts the city totals shown on the HUD and the stats screen.
 void count_city() {
     res_levels = com_levels = ind_levels = road_count = 0;
@@ -161,6 +225,8 @@ void count_city() {
         }
     }
     population = res_levels * PEOPLE_PER_LEVEL;
+
+    update_power();
 }
 
 // What goes into the save file. read_save/write_save copy this struct
@@ -255,8 +321,8 @@ void simulate() {
                 if(lv > 0) lv--;
                 continue;
             }
-            if(lv >= MAX_LEVEL) {
-                continue;
+            if(lv >= MAX_LEVEL || !powered[y][x]) {
+                continue; // full, or no electricity: nobody moves in
             }
 
             bool demand = false;
@@ -449,10 +515,17 @@ void render_city(uint32_t time) {
                 case TILE_RESIDENTIAL: sprite = SPRITE_RESIDENTIAL + level[my][mx]; break;
                 case TILE_COMMERCIAL:  sprite = SPRITE_COMMERCIAL + level[my][mx]; break;
                 case TILE_INDUSTRIAL:  sprite = SPRITE_INDUSTRIAL + level[my][mx]; break;
+                case TILE_POWER_LINE:  sprite = SPRITE_POWER_LINE + power_mask(mx, my); break;
+                case TILE_POWER_PLANT: sprite = SPRITE_POWER_PLANT + level[my][mx]; break;
                 case TILE_GRASS:
                 default:               sprite = SPRITE_GRASS; break;
             }
             screen.sprite(sprite, Point(sx * TILE_SIZE, sy * TILE_SIZE));
+
+            // zones without power blink a bolt, half a second on, half off
+            if(is_zone(map[my][mx]) && !powered[my][mx] && (time / 500) % 2 == 0) {
+                screen.sprite(SPRITE_NO_POWER, Point(sx * TILE_SIZE, sy * TILE_SIZE));
+            }
         }
     }
 
@@ -634,7 +707,31 @@ void update(uint32_t time) {
             case TOOL_INDUSTRIAL:
                 if(tile == TILE_GRASS) tile = TILE_INDUSTRIAL;
                 break;
+            case TOOL_POWER_LINE:
+                if(tile == TILE_GRASS) tile = TILE_POWER_LINE;
+                break;
+            case TOOL_POWER_PLANT:
+                // the cursor is the top-left of a 2x2 plant; all four tiles must be grass
+                if(cursor.x < MAP_W - 1 && cursor.y < MAP_H - 1
+                   && map[cursor.y][cursor.x] == TILE_GRASS && map[cursor.y][cursor.x + 1] == TILE_GRASS
+                   && map[cursor.y + 1][cursor.x] == TILE_GRASS && map[cursor.y + 1][cursor.x + 1] == TILE_GRASS) {
+                    for(int part = 0; part < 4; part++) {
+                        map[cursor.y + part / 2][cursor.x + part % 2] = TILE_POWER_PLANT;
+                        level[cursor.y + part / 2][cursor.x + part % 2] = part;
+                    }
+                }
+                break;
             case TOOL_BULLDOZER:
+                if(tile == TILE_POWER_PLANT) {
+                    // remove the whole plant: find its top-left from the quarter number
+                    int part = level[cursor.y][cursor.x];
+                    int left = cursor.x - part % 2;
+                    int top = cursor.y - part / 2;
+                    for(int p = 0; p < 4; p++) {
+                        map[top + p / 2][left + p % 2] = TILE_GRASS;
+                        level[top + p / 2][left + p % 2] = 0;
+                    }
+                }
                 tile = TILE_GRASS;
                 level[cursor.y][cursor.x] = 0;
                 break;
@@ -644,6 +741,7 @@ void update(uint32_t time) {
         // only pay when something actually changed
         if(tile != before) {
             money -= cost;
+            update_power(); // so the no-power bolts update right away
         }
     }
 }
