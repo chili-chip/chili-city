@@ -13,8 +13,8 @@ using namespace blit;
 constexpr int TILE_SIZE = 8;
 
 // The whole city is bigger than the screen; the camera shows part of it.
-constexpr int MAP_W = 32;
-constexpr int MAP_H = 32;
+constexpr int MAP_W = 64;
+constexpr int MAP_H = 64;
 
 // What is on each map tile. One byte per tile.
 enum Tile : uint8_t {
@@ -211,6 +211,7 @@ enum Screen {
     SCREEN_PAUSE,
     SCREEN_BUDGET,
     SCREEN_WON,
+    SCREEN_MINIMAP,
 };
 Screen current_screen = SCREEN_TITLE;
 
@@ -299,28 +300,31 @@ int power_mask(int x, int y) {
 // Flood fill from every power plant through connected tiles that carry
 // power. Whatever the fill reaches is powered.
 void update_power() {
-    // tiles still to visit; a tile is only added once, so MAP_W * MAP_H is enough
-    static Point todo[MAP_W * MAP_H];
+    // tiles still to visit; a tile is only added once, so MAP_W * MAP_H is
+    // enough. Stored as y * MAP_W + x in 2 bytes, not as a Point (8 bytes),
+    // to save RAM on the console.
+    static uint16_t todo[MAP_W * MAP_H];
     int count = 0;
 
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
             powered[y][x] = map[y][x] == TILE_POWER_PLANT;
             if(powered[y][x]) {
-                todo[count++] = Point(x, y);
+                todo[count++] = y * MAP_W + x;
             }
         }
     }
 
     const Point steps[4] = {Point(0, -1), Point(1, 0), Point(0, 1), Point(-1, 0)};
     while(count > 0) {
-        Point p = todo[--count];
+        int index = todo[--count];
+        Point p(index % MAP_W, index / MAP_W);
         for(auto &step : steps) {
             Point n = p + step;
             if(n.x < 0 || n.y < 0 || n.x >= MAP_W || n.y >= MAP_H) continue;
             if(powered[n.y][n.x] || !carries_power(map[n.y][n.x])) continue;
             powered[n.y][n.x] = true;
-            todo[count++] = n;
+            todo[count++] = n.y * MAP_W + n.x;
         }
     }
 }
@@ -419,7 +423,7 @@ void count_city() {
 // byte for byte, so magic and version let us spot a file from another
 // game or an older layout and ignore it.
 constexpr uint32_t SAVE_MAGIC = 0x59544943; // "CITY"
-constexpr uint8_t SAVE_VERSION = 4;
+constexpr uint8_t SAVE_VERSION = 5;
 
 struct SaveData {
     uint32_t magic;
@@ -433,15 +437,28 @@ struct SaveData {
     int32_t disasters; // new in version 4
 };
 
-// Every version only adds fields at the end, so an older file is the
-// first part of SaveData. This is how many bytes each version wrote;
-// version 1 is Chili City v2.0.0.
-const size_t save_sizes[SAVE_VERSION + 1] = {
-    0,                            // no version 0
-    offsetof(SaveData, tax_rate), // 1
-    offsetof(SaveData, rank),     // 2
-    offsetof(SaveData, disasters), // 3
-    sizeof(SaveData),             // 4
+// Versions 1 to 4 had a 32x32 map. Apart from that they had the same
+// fields, each version adding some at the end, so an older file is the
+// first part of SaveData32. This is how many bytes each one wrote;
+// version 1 is Chili City v2.0.0. Version 5 grew the map to 64x64.
+constexpr int OLD_MAP_SIZE = 32;
+struct SaveData32 {
+    uint32_t magic;
+    uint8_t version;
+    uint8_t map[OLD_MAP_SIZE][OLD_MAP_SIZE];
+    uint8_t level[OLD_MAP_SIZE][OLD_MAP_SIZE];
+    int32_t money;
+    int32_t month;
+    int32_t tax_rate;
+    int32_t rank;
+    int32_t disasters;
+};
+const size_t save32_sizes[5] = {
+    0,                               // no version 0
+    offsetof(SaveData32, tax_rate),  // 1
+    offsetof(SaveData32, rank),      // 2
+    offsetof(SaveData32, disasters), // 3
+    sizeof(SaveData32),              // 4
 };
 
 // When the city was last saved, to show "SAVED" on the HUD for a moment.
@@ -449,7 +466,7 @@ uint32_t saved_time = 0;
 bool was_saved = false;
 
 void save_city() {
-    // static: about 2 KB, better kept off the stack
+    // static: about 8 KB, better kept off the stack
     static SaveData save;
     save.magic = SAVE_MAGIC;
     save.version = SAVE_VERSION;
@@ -466,19 +483,35 @@ void save_city() {
 // Returns false when there is no usable save, so the game starts fresh.
 bool load_city() {
     static SaveData save;
-    // newer fields keep these defaults when an older, shorter file is read
-    save = SaveData{};
-    save.tax_rate = DEFAULT_TAX_RATE;
-    save.rank = -1; // -1: work it out from the population
-    save.disasters = 1;
+    static SaveData32 old;
 
     // read_save() fails when the file is shorter than asked for, so read
     // the magic and version first, then as many bytes as that version wrote
-    char *bytes = reinterpret_cast<char *>(&save);
-    if(!read_save(bytes, offsetof(SaveData, map)) || save.magic != SAVE_MAGIC
-       || save.version < 1 || save.version > SAVE_VERSION
-       || !read_save(bytes, save_sizes[save.version])) {
+    if(!read_save(reinterpret_cast<char *>(&save), offsetof(SaveData, map))
+       || save.magic != SAVE_MAGIC || save.version < 1 || save.version > SAVE_VERSION) {
         return false;
+    }
+    if(save.version == SAVE_VERSION) {
+        if(!read_save(save)) return false;
+    } else {
+        // an older 32x32 city: newer fields keep these defaults when the file
+        // is shorter, and the map goes in the top-left corner of the new one
+        old = SaveData32{};
+        old.tax_rate = DEFAULT_TAX_RATE;
+        old.rank = -1; // -1: work it out from the population
+        old.disasters = 1;
+        if(!read_save(reinterpret_cast<char *>(&old), save32_sizes[save.version])) return false;
+
+        save = SaveData{};
+        for(int y = 0; y < OLD_MAP_SIZE; y++) {
+            memcpy(save.map[y], old.map[y], OLD_MAP_SIZE);
+            memcpy(save.level[y], old.level[y], OLD_MAP_SIZE);
+        }
+        save.money = old.money;
+        save.month = old.month;
+        save.tax_rate = old.tax_rate;
+        save.rank = old.rank;
+        save.disasters = old.disasters;
     }
     memcpy(map, save.map, sizeof(map));
     memcpy(level, save.level, sizeof(level));
@@ -813,13 +846,13 @@ void render_title() {
     }
 }
 
-const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "DISASTERS", "SAVE + TITLE"};
-constexpr int PAUSE_ITEMS = 5;
-enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_DISASTERS, PAUSE_SAVE};
+const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "MINIMAP", "DISASTERS", "SAVE + TITLE"};
+constexpr int PAUSE_ITEMS = 6;
+enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_MINIMAP, PAUSE_DISASTERS, PAUSE_SAVE};
 
 // The pause menu, drawn as a box over the frozen city.
 void render_pause() {
-    Rect box(14, 18, screen.bounds.w - 28, 88);
+    Rect box(14, 12, screen.bounds.w - 28, 100);
     screen.pen = Pen(0, 0, 0);
     screen.rectangle(box);
     screen.pen = Pen(255, 255, 255);
@@ -829,7 +862,7 @@ void render_pause() {
     std::string speed_line = std::string("SPEED: ") + speed_names[speed];
     std::string disasters_line = std::string("DISASTERS: ") + (disasters ? "ON" : "OFF");
     const char *items[PAUSE_ITEMS] = {pause_items[0], speed_line.c_str(), pause_items[2],
-                                      disasters_line.c_str(), pause_items[4]};
+                                      pause_items[3], disasters_line.c_str(), pause_items[5]};
     render_menu(items, PAUSE_ITEMS, box.y + 20);
 }
 
@@ -872,6 +905,7 @@ void render_budget() {
 
 void render_city(uint32_t time);
 void render_won();
+void render_minimap(uint32_t time);
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -916,6 +950,9 @@ void render(uint32_t time) {
             break;
         case SCREEN_WON:
             render_won();
+            break;
+        case SCREEN_MINIMAP:
+            render_minimap(time);
             break;
         case SCREEN_CITY:
             if(show_stats) {
@@ -1027,6 +1064,51 @@ void render_city(uint32_t time) {
     }
 }
 
+// The minimap: the whole 64x64 city, each tile a 2x2 dot of its colour,
+// with a frame showing the part that fits on the screen.
+Point minimap_view(0, 0);
+constexpr int MINIMAP_DOT = 2; // 64 tiles * 2 px = the whole 128 px screen
+
+Pen minimap_colour(int x, int y) {
+    if(fire[y][x] > 0) return Pen(255, 140, 0);
+    switch(map[y][x]) {
+        case TILE_ROAD:           return Pen(110, 110, 115);
+        case TILE_RESIDENTIAL:    return level[y][x] ? Pen(110, 210, 110) : Pen(60, 140, 60);
+        case TILE_COMMERCIAL:     return level[y][x] ? Pen(100, 150, 240) : Pen(60, 90, 160);
+        case TILE_INDUSTRIAL:     return level[y][x] ? Pen(230, 200, 80) : Pen(150, 130, 60);
+        case TILE_POWER_LINE:     return Pen(120, 80, 40);
+        case TILE_POWER_PLANT:    return Pen(60, 60, 65);
+        case TILE_PARK:           return Pen(40, 200, 60);
+        case TILE_FIRE_STATION:   return Pen(220, 50, 40);
+        case TILE_POLICE_STATION: return Pen(40, 70, 200);
+        default:                  return Pen(20, 70, 20); // grass
+    }
+}
+
+void render_minimap(uint32_t time) {
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            screen.pen = minimap_colour(x, y);
+            screen.rectangle(Rect(x * MINIMAP_DOT, y * MINIMAP_DOT, MINIMAP_DOT, MINIMAP_DOT));
+        }
+    }
+
+    // the frame: what the screen will show, blinking so it stands out
+    if((time / 300) % 2 == 0) {
+        int view_w = screen.bounds.w / TILE_SIZE;
+        int view_h = screen.bounds.h / TILE_SIZE;
+        Rect frame(minimap_view.x * MINIMAP_DOT, minimap_view.y * MINIMAP_DOT,
+                   view_w * MINIMAP_DOT, view_h * MINIMAP_DOT);
+        screen.pen = Pen(255, 255, 255);
+        screen.rectangle(Rect(frame.x, frame.y, frame.w, 1));
+        screen.rectangle(Rect(frame.x, frame.y + frame.h - 1, frame.w, 1));
+        screen.rectangle(Rect(frame.x, frame.y, 1, frame.h));
+        screen.rectangle(Rect(frame.x + frame.w - 1, frame.y, 1, frame.h));
+    }
+
+    label("A: GO  B: BACK", Point(0, screen.bounds.h), TextAlign::bottom_left);
+}
+
 // Shown once, when the city becomes a capital. The game goes on after it.
 void render_won() {
     screen.pen = Pen(0, 0, 40);
@@ -1100,6 +1182,9 @@ void update_pause() {
             current_screen = SCREEN_CITY;
         } else if(menu_choice == PAUSE_BUDGET) {
             current_screen = SCREEN_BUDGET;
+        } else if(menu_choice == PAUSE_MINIMAP) {
+            minimap_view = camera;
+            current_screen = SCREEN_MINIMAP;
         } else if(menu_choice == PAUSE_SAVE) {
             save_city();
             has_save = true;
@@ -1186,6 +1271,46 @@ void use_tool(uint32_t time) {
     }
 }
 
+// The D-pad as a move: a press moves once, and a held direction repeats
+// after a short delay. Returns the directions to move this frame.
+// buttons.pressed only has the buttons that went down since the last
+// update; buttons.state has every button held right now.
+uint32_t dpad_moves(uint32_t time) {
+    const uint32_t dpad = Button::DPAD_LEFT | Button::DPAD_RIGHT | Button::DPAD_UP | Button::DPAD_DOWN;
+    uint32_t move = buttons.pressed & dpad;
+    if(move) {
+        next_repeat_time = time + REPEAT_DELAY_MS;
+    } else if((buttons.state & dpad) && time >= next_repeat_time) {
+        move = buttons.state & dpad;
+        next_repeat_time = time + REPEAT_RATE_MS;
+    }
+    return move;
+}
+
+// The D-pad moves the frame; A jumps there, B goes back to the pause menu.
+void update_minimap(uint32_t time) {
+    uint32_t move = dpad_moves(time);
+    if(move & Button::DPAD_LEFT)  minimap_view.x--;
+    if(move & Button::DPAD_RIGHT) minimap_view.x++;
+    if(move & Button::DPAD_UP)    minimap_view.y--;
+    if(move & Button::DPAD_DOWN)  minimap_view.y++;
+    int view_w = screen.bounds.w / TILE_SIZE;
+    int view_h = screen.bounds.h / TILE_SIZE;
+    minimap_view.x = std::max(0, std::min(MAP_W - view_w, int(minimap_view.x)));
+    minimap_view.y = std::max(0, std::min(MAP_H - view_h, int(minimap_view.y)));
+
+    if(buttons.pressed & Button::A) {
+        // the camera shows the frame, and the cursor goes to its middle
+        camera = minimap_view;
+        cursor = minimap_view + Point(view_w / 2, view_h / 2);
+        current_screen = SCREEN_CITY;
+        play(SOUND_MENU);
+    } else if(buttons.pressed & (Button::B | Button::MENU)) {
+        current_screen = SCREEN_PAUSE;
+        play(SOUND_MENU);
+    }
+}
+
 // Left and right change the tax rate; A or B go back to the pause menu.
 void update_budget() {
     if(buttons.pressed & Button::DPAD_LEFT)  tax_rate = std::max(0, tax_rate - 1);
@@ -1220,6 +1345,10 @@ void update(uint32_t time) {
             update_budget();
             last_month_time = time;
             return;
+        case SCREEN_MINIMAP:
+            update_minimap(time);
+            last_month_time = time;
+            return;
         case SCREEN_WON:
             if(buttons.pressed & Button::A) {
                 current_screen = SCREEN_CITY;
@@ -1238,18 +1367,7 @@ void update(uint32_t time) {
         return;
     }
 
-    // buttons.pressed only has the buttons that went down since the last
-    // update; buttons.state has every button held right now. A press moves
-    // once, and a held direction repeats after a short delay.
-    const uint32_t dpad = Button::DPAD_LEFT | Button::DPAD_RIGHT | Button::DPAD_UP | Button::DPAD_DOWN;
-    uint32_t move = buttons.pressed & dpad;
-    if(move) {
-        next_repeat_time = time + REPEAT_DELAY_MS;
-    } else if((buttons.state & dpad) && time >= next_repeat_time) {
-        move = buttons.state & dpad;
-        next_repeat_time = time + REPEAT_RATE_MS;
-    }
-
+    uint32_t move = dpad_moves(time);
     Point old_cursor = cursor;
     if(move & Button::DPAD_LEFT)  cursor.x--;
     if(move & Button::DPAD_RIGHT) cursor.x++;
