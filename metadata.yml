@@ -1,10 +1,10 @@
 title: Chili City
 description: A tiny SimCity-like city builder for VGC Zero
-author: you
+author: pablolambo
 splash:
-  file: assets/no-image.png
+  file: assets/splash.png
 icon:
-  file: assets/no-icon.png
+  file: assets/icon.png
 version: v0.0.1
 category: game # game, demo, utility, ...
-url: https://github.com/32blit/32blit-boilerplate
+url: https://github.com/chili-chip/chili-city
