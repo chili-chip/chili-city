@@ -27,6 +27,7 @@ enum Tile : uint8_t {
     TILE_POWER_PLANT, // 2x2; level[][] holds which quarter (0..3)
     TILE_PARK,
     TILE_FIRE_STATION,
+    TILE_POLICE_STATION,
 };
 
 // Where each tile's picture is in assets/tiles.png. The sheet is 8 sprites
@@ -34,6 +35,7 @@ enum Tile : uint8_t {
 constexpr int SPRITE_GRASS = 0;
 constexpr int SPRITE_ROAD = 16;        // + which neighbours are roads (0..15)
 constexpr int SPRITE_RESIDENTIAL = 32; // + level (0..3)
+constexpr int SPRITE_POLICE_STATION = 36;
 constexpr int SPRITE_COMMERCIAL = 40;  // + level
 constexpr int SPRITE_INDUSTRIAL = 48;  // + level
 constexpr int SPRITE_POWER_LINE = 56;  // + which neighbours carry power (0..15)
@@ -53,6 +55,7 @@ enum Tool {
     TOOL_POWER_PLANT,
     TOOL_PARK,
     TOOL_FIRE_STATION,
+    TOOL_POLICE_STATION,
     TOOL_BULLDOZER,
     TOOL_COUNT, // number of tools, keep last
 };
@@ -67,6 +70,7 @@ const int tool_costs[TOOL_COUNT] = {
     1500, // power plant
     20, // park
     500, // fire station
+    500, // police station
     5,  // bulldozer
 };
 
@@ -79,6 +83,7 @@ const char *tool_names[TOOL_COUNT] = {
     "PLANT",
     "PARK",
     "FIRE STN",
+    "POLICE",
     "BULLDOZE",
 };
 
@@ -102,6 +107,13 @@ constexpr int BURN_MONTHS = 3;
 bool fire_covered[MAP_H][MAP_W];
 constexpr int FIRE_STATION_RADIUS = 6; // tiles in each direction
 
+// Crime, 0..255, worked out by update_land(): dense homes and shops breed
+// it, police stations keep it down. Homes stop growing in high crime, and
+// crime lowers land value.
+uint8_t crime[MAP_H][MAP_W];
+constexpr int CRIME_NO_GROWTH = 60;
+constexpr int POLICE_STATION_RADIUS = 6;
+
 // Disasters (fires) can be turned off in the pause menu.
 bool disasters = true;
 
@@ -123,10 +135,11 @@ enum Overlay {
     OVERLAY_NONE = 0,
     OVERLAY_POLLUTION,
     OVERLAY_LAND_VALUE,
+    OVERLAY_CRIME,
     OVERLAY_COUNT, // keep last
 };
 Overlay overlay = OVERLAY_NONE;
-const char *overlay_names[OVERLAY_COUNT] = {"", "POLLUTION", "LAND VALUE"};
+const char *overlay_names[OVERLAY_COUNT] = {"", "POLLUTION", "LAND VALUE", "CRIME"};
 
 // People living on one residential level.
 constexpr int PEOPLE_PER_LEVEL = 20;
@@ -158,6 +171,7 @@ int res_levels = 0, com_levels = 0, ind_levels = 0;
 int road_count = 0;
 int plant_count = 0; // power plants, not tiles: each plant is 4 tiles
 int fire_station_count = 0;
+int police_station_count = 0;
 
 // Money. Building costs money, taxes bring it in once a month.
 int money = 5000;
@@ -174,13 +188,14 @@ int tax_rate = DEFAULT_TAX_RATE;
 constexpr int ROAD_UPKEEP = 1;
 constexpr int PLANT_UPKEEP = 50;
 constexpr int FIRE_STATION_UPKEEP = 20;
+constexpr int POLICE_STATION_UPKEEP = 20;
 
 // Money in and out, added up over a year for the budget screen.
 struct Budget {
     int taxes = 0;
     int roads = 0;
     int power = 0;
-    int services = 0; // fire stations
+    int services = 0; // fire and police stations
 };
 Budget this_year, last_year;
 bool have_last_year = false; // false until a year ends after a new game or load
@@ -338,9 +353,12 @@ void cover(bool grid[MAP_H][MAP_W], int cx, int cy, int radius) {
 // value around them; pollution lowers it.
 void update_land() {
     static uint8_t park_bonus[MAP_H][MAP_W];
+    static bool police_covered[MAP_H][MAP_W];
     memset(pollution, 0, sizeof(pollution));
     memset(park_bonus, 0, sizeof(park_bonus));
     memset(fire_covered, 0, sizeof(fire_covered));
+    memset(crime, 0, sizeof(crime));
+    memset(police_covered, 0, sizeof(police_covered));
 
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
@@ -351,13 +369,24 @@ void update_land() {
                 spread(park_bonus, x, y, 30, 10);
             } else if(map[y][x] == TILE_FIRE_STATION) {
                 cover(fire_covered, x, y, FIRE_STATION_RADIUS);
+            } else if(map[y][x] == TILE_POLICE_STATION) {
+                cover(police_covered, x, y, POLICE_STATION_RADIUS);
+            }
+            // crowded homes and shops breed crime: only the bigger buildings
+            // reach their neighbours, so it adds up where the city is dense
+            if((map[y][x] == TILE_RESIDENTIAL || map[y][x] == TILE_COMMERCIAL) && level[y][x] > 0) {
+                spread(crime, x, y, level[y][x] * 8, 8);
             }
         }
     }
 
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
-            int value = BASE_LAND_VALUE + park_bonus[y][x] - pollution[y][x] / 2;
+            // police cut crime to a quarter in their reach
+            if(police_covered[y][x]) {
+                crime[y][x] /= 4;
+            }
+            int value = BASE_LAND_VALUE + park_bonus[y][x] - pollution[y][x] / 2 - crime[y][x] / 2;
             land_value[y][x] = std::max(0, std::min(255, value));
         }
     }
@@ -365,7 +394,7 @@ void update_land() {
 
 // Recounts the city totals shown on the HUD and the stats screen.
 void count_city() {
-    res_levels = com_levels = ind_levels = road_count = plant_count = fire_station_count = 0;
+    res_levels = com_levels = ind_levels = road_count = plant_count = fire_station_count = police_station_count = 0;
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
             switch(map[y][x]) {
@@ -375,6 +404,7 @@ void count_city() {
                 case TILE_ROAD:        road_count++; break;
                 case TILE_POWER_PLANT: if(level[y][x] == 0) plant_count++; break; // count top-left quarters
                 case TILE_FIRE_STATION: fire_station_count++; break;
+                case TILE_POLICE_STATION: police_station_count++; break;
                 default: break;
             }
         }
@@ -600,6 +630,9 @@ void simulate() {
             if(tile == TILE_RESIDENTIAL && pollution[y][x] >= POLLUTION_NO_GROWTH) {
                 continue; // too smoggy to move in
             }
+            if(tile == TILE_RESIDENTIAL && crime[y][x] >= CRIME_NO_GROWTH) {
+                continue; // too dangerous to move in
+            }
 
             bool demand = false;
             switch(tile) {
@@ -622,7 +655,8 @@ void simulate() {
 
     int road_upkeep = road_count * ROAD_UPKEEP;
     int power_upkeep = plant_count * PLANT_UPKEEP;
-    int service_upkeep = fire_station_count * FIRE_STATION_UPKEEP;
+    int service_upkeep = fire_station_count * FIRE_STATION_UPKEEP
+                       + police_station_count * POLICE_STATION_UPKEEP;
     last_income = taxes - road_upkeep - power_upkeep - service_upkeep;
     money += last_income;
 
@@ -914,6 +948,7 @@ void render_city(uint32_t time) {
                 case TILE_POWER_PLANT: sprite = SPRITE_POWER_PLANT + level[my][mx]; break;
                 case TILE_PARK:        sprite = SPRITE_PARK; break;
                 case TILE_FIRE_STATION: sprite = SPRITE_FIRE_STATION; break;
+                case TILE_POLICE_STATION: sprite = SPRITE_POLICE_STATION; break;
                 case TILE_GRASS:
                 default:               sprite = SPRITE_GRASS; break;
             }
@@ -944,6 +979,9 @@ void render_city(uint32_t time) {
                     screen.pen = Pen(40, 220, 255, std::min(220, diff * 6));
                     screen.rectangle(r);
                 }
+            } else if(overlay == OVERLAY_CRIME && crime[my][mx] > 0) {
+                screen.pen = Pen(230, 0, 0, std::min(220, crime[my][mx] * 3));
+                screen.rectangle(r);
             }
         }
     }
@@ -1104,6 +1142,9 @@ void use_tool(uint32_t time) {
             break;
         case TOOL_FIRE_STATION:
             if(tile == TILE_GRASS) tile = TILE_FIRE_STATION;
+            break;
+        case TOOL_POLICE_STATION:
+            if(tile == TILE_GRASS) tile = TILE_POLICE_STATION;
             break;
         case TOOL_POWER_PLANT:
             // the cursor is the top-left of a 2x2 plant; all four tiles must be grass
