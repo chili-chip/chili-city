@@ -39,9 +39,11 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
   | Power line | $5 |
   | Power plant | $1500 |
   | Park | $20 |
+  | Fire station | $500 |
   | Bulldoze | $5 |
 
-- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile and $50 per power plant.
+- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile, $50 per power plant and $20 per fire station.
+- Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Disasters can be turned off in the pause menu.
 - The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
 - The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast), open the budget, or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
@@ -107,6 +109,8 @@ All graphics are 8×8 sprites in `assets/tiles.png` (8 sprites per row):
 | 72–75 | power plant: top-left, top-right, bottom-left, bottom-right quarter |
 | 76 | "no power" bolt, drawn over unpowered zones (transparent background) |
 | 77 | park |
+| 78 | fire station |
+| 79 | fire, drawn over burning buildings (transparent background) |
 
 Redraw them in any pixel editor; keep the layout and the game picks them up.
 

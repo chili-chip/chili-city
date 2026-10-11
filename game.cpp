@@ -26,6 +26,7 @@ enum Tile : uint8_t {
     TILE_POWER_LINE,
     TILE_POWER_PLANT, // 2x2; level[][] holds which quarter (0..3)
     TILE_PARK,
+    TILE_FIRE_STATION,
 };
 
 // Where each tile's picture is in assets/tiles.png. The sheet is 8 sprites
@@ -39,6 +40,8 @@ constexpr int SPRITE_POWER_LINE = 56;  // + which neighbours carry power (0..15)
 constexpr int SPRITE_POWER_PLANT = 72; // + quarter: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
 constexpr int SPRITE_NO_POWER = 76;    // bolt drawn over zones without power
 constexpr int SPRITE_PARK = 77;
+constexpr int SPRITE_FIRE_STATION = 78;
+constexpr int SPRITE_FIRE = 79;        // flames drawn over a burning building
 
 // What pressing A does. B switches to the next tool.
 enum Tool {
@@ -49,6 +52,7 @@ enum Tool {
     TOOL_POWER_LINE,
     TOOL_POWER_PLANT,
     TOOL_PARK,
+    TOOL_FIRE_STATION,
     TOOL_BULLDOZER,
     TOOL_COUNT, // number of tools, keep last
 };
@@ -62,6 +66,7 @@ const int tool_costs[TOOL_COUNT] = {
     5,  // power line
     1500, // power plant
     20, // park
+    500, // fire station
     5,  // bulldozer
 };
 
@@ -73,6 +78,7 @@ const char *tool_names[TOOL_COUNT] = {
     "POWER LINE",
     "PLANT",
     "PARK",
+    "FIRE STN",
     "BULLDOZE",
 };
 
@@ -87,6 +93,17 @@ uint8_t level[MAP_H][MAP_W];
 
 // Which tiles get electricity, worked out by update_power().
 bool powered[MAP_H][MAP_W];
+
+// Months left until a burning building burns down; 0 = not on fire.
+uint8_t fire[MAP_H][MAP_W];
+constexpr int BURN_MONTHS = 3;
+
+// Tiles a fire station reaches, worked out by update_land().
+bool fire_covered[MAP_H][MAP_W];
+constexpr int FIRE_STATION_RADIUS = 6; // tiles in each direction
+
+// Disasters (fires) can be turned off in the pause menu.
+bool disasters = true;
 
 // Smog from industry and how nice each tile is to live on, 0..255,
 // worked out by update_land(). Homes care about both.
@@ -140,6 +157,7 @@ int population = 0;
 int res_levels = 0, com_levels = 0, ind_levels = 0;
 int road_count = 0;
 int plant_count = 0; // power plants, not tiles: each plant is 4 tiles
+int fire_station_count = 0;
 
 // Money. Building costs money, taxes bring it in once a month.
 int money = 5000;
@@ -155,12 +173,14 @@ int tax_rate = DEFAULT_TAX_RATE;
 // Monthly upkeep: every road tile and every power plant.
 constexpr int ROAD_UPKEEP = 1;
 constexpr int PLANT_UPKEEP = 50;
+constexpr int FIRE_STATION_UPKEEP = 20;
 
 // Money in and out, added up over a year for the budget screen.
 struct Budget {
     int taxes = 0;
     int roads = 0;
     int power = 0;
+    int services = 0; // fire stations
 };
 Budget this_year, last_year;
 bool have_last_year = false; // false until a year ends after a new game or load
@@ -305,12 +325,22 @@ void spread(uint8_t grid[MAP_H][MAP_W], int cx, int cy, int amount, int falloff)
     }
 }
 
+// Marks every tile in the square of the given radius around (cx, cy).
+void cover(bool grid[MAP_H][MAP_W], int cx, int cy, int radius) {
+    for(int y = std::max(0, cy - radius); y <= std::min(MAP_H - 1, cy + radius); y++) {
+        for(int x = std::max(0, cx - radius); x <= std::min(MAP_W - 1, cx + radius); x++) {
+            grid[y][x] = true;
+        }
+    }
+}
+
 // Industry pollutes around it, more the bigger it is. Parks raise land
 // value around them; pollution lowers it.
 void update_land() {
     static uint8_t park_bonus[MAP_H][MAP_W];
     memset(pollution, 0, sizeof(pollution));
     memset(park_bonus, 0, sizeof(park_bonus));
+    memset(fire_covered, 0, sizeof(fire_covered));
 
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
@@ -319,6 +349,8 @@ void update_land() {
                 spread(pollution, x, y, level[y][x] * 40, 20);
             } else if(map[y][x] == TILE_PARK) {
                 spread(park_bonus, x, y, 30, 10);
+            } else if(map[y][x] == TILE_FIRE_STATION) {
+                cover(fire_covered, x, y, FIRE_STATION_RADIUS);
             }
         }
     }
@@ -333,7 +365,7 @@ void update_land() {
 
 // Recounts the city totals shown on the HUD and the stats screen.
 void count_city() {
-    res_levels = com_levels = ind_levels = road_count = plant_count = 0;
+    res_levels = com_levels = ind_levels = road_count = plant_count = fire_station_count = 0;
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
             switch(map[y][x]) {
@@ -342,6 +374,7 @@ void count_city() {
                 case TILE_INDUSTRIAL:  ind_levels += level[y][x]; break;
                 case TILE_ROAD:        road_count++; break;
                 case TILE_POWER_PLANT: if(level[y][x] == 0) plant_count++; break; // count top-left quarters
+                case TILE_FIRE_STATION: fire_station_count++; break;
                 default: break;
             }
         }
@@ -356,7 +389,7 @@ void count_city() {
 // byte for byte, so magic and version let us spot a file from another
 // game or an older layout and ignore it.
 constexpr uint32_t SAVE_MAGIC = 0x59544943; // "CITY"
-constexpr uint8_t SAVE_VERSION = 3;
+constexpr uint8_t SAVE_VERSION = 4;
 
 struct SaveData {
     uint32_t magic;
@@ -367,6 +400,7 @@ struct SaveData {
     int32_t month;
     int32_t tax_rate; // new in version 2
     int32_t rank;     // new in version 3
+    int32_t disasters; // new in version 4
 };
 
 // Every version only adds fields at the end, so an older file is the
@@ -376,7 +410,8 @@ const size_t save_sizes[SAVE_VERSION + 1] = {
     0,                            // no version 0
     offsetof(SaveData, tax_rate), // 1
     offsetof(SaveData, rank),     // 2
-    sizeof(SaveData),             // 3
+    offsetof(SaveData, disasters), // 3
+    sizeof(SaveData),             // 4
 };
 
 // When the city was last saved, to show "SAVED" on the HUD for a moment.
@@ -394,6 +429,7 @@ void save_city() {
     save.month = month;
     save.tax_rate = tax_rate;
     save.rank = rank;
+    save.disasters = disasters;
     write_save(save);
 }
 
@@ -404,6 +440,7 @@ bool load_city() {
     save = SaveData{};
     save.tax_rate = DEFAULT_TAX_RATE;
     save.rank = -1; // -1: work it out from the population
+    save.disasters = 1;
 
     // read_save() fails when the file is shorter than asked for, so read
     // the magic and version first, then as many bytes as that version wrote
@@ -415,8 +452,10 @@ bool load_city() {
     }
     memcpy(map, save.map, sizeof(map));
     memcpy(level, save.level, sizeof(level));
+    memset(fire, 0, sizeof(fire)); // fires are not saved; they go out
     money = save.money;
     month = save.month;
+    disasters = save.disasters != 0;
     tax_rate = std::max(0, std::min(MAX_TAX_RATE, int(save.tax_rate)));
     this_year = last_year = Budget();
     have_last_year = false;
@@ -432,9 +471,11 @@ void new_city() {
         for(int x = 0; x < MAP_W; x++) {
             map[y][x] = TILE_GRASS;
             level[y][x] = 0;
+            fire[y][x] = 0;
         }
     }
     money = 5000;
+    disasters = true;
     month = 0;
     last_income = 0;
     tax_rate = DEFAULT_TAX_RATE;
@@ -462,6 +503,55 @@ int com_demand(int res, int com) {
 }
 int ind_demand(int res, int ind) {
     return res - ind + tax_effect();           // factories need workers
+}
+
+// Only buildings burn: zones with something built on them.
+bool flammable(int x, int y) {
+    return is_zone(map[y][x]) && level[y][x] > 0;
+}
+
+// One month of fires. Fire stations put out fires in their reach; other
+// fires spread to the buildings next door and burn down to an empty lot.
+// Returns true when a new fire broke out.
+bool update_fires() {
+    // fires that were burning at the start of the month; new ones wait
+    static bool was_burning[MAP_H][MAP_W];
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            was_burning[y][x] = fire[y][x] > 0;
+        }
+    }
+
+    const Point steps[4] = {Point(0, -1), Point(1, 0), Point(0, 1), Point(-1, 0)};
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            if(!was_burning[y][x]) continue;
+            if(fire_covered[y][x] || !flammable(x, y)) {
+                fire[y][x] = 0; // put out, or nothing left to burn
+                continue;
+            }
+            // spread: one in three chance for each building next door
+            for(auto &step : steps) {
+                int nx = x + step.x, ny = y + step.y;
+                if(nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
+                if(fire[ny][nx] == 0 && flammable(nx, ny) && blit::random() % 3 == 0) {
+                    fire[ny][nx] = BURN_MONTHS;
+                }
+            }
+            if(--fire[y][x] == 0) {
+                level[y][x] = 0; // burnt down to an empty lot
+            }
+        }
+    }
+
+    // now and then (one month in eight) a random building catches fire;
+    // under a fire station's watch only one time in four
+    if(!disasters || blit::random() % 8 != 0) return false;
+    int x = blit::random() % MAP_W, y = blit::random() % MAP_H;
+    if(!flammable(x, y) || fire[y][x] > 0) return false;
+    if(fire_covered[y][x] && blit::random() % 4 != 0) return false;
+    fire[y][x] = BURN_MONTHS;
+    return true;
 }
 
 // One month of city life: zones next to roads grow when there is demand,
@@ -492,6 +582,9 @@ void simulate() {
             }
 
             uint8_t &lv = level[y][x];
+            if(fire[y][x] > 0) {
+                continue; // nobody moves into a burning building
+            }
             if(!next_to_road(x, y)) {
                 if(lv > 0) lv--;
                 continue;
@@ -529,12 +622,14 @@ void simulate() {
 
     int road_upkeep = road_count * ROAD_UPKEEP;
     int power_upkeep = plant_count * PLANT_UPKEEP;
-    last_income = taxes - road_upkeep - power_upkeep;
+    int service_upkeep = fire_station_count * FIRE_STATION_UPKEEP;
+    last_income = taxes - road_upkeep - power_upkeep - service_upkeep;
     money += last_income;
 
     this_year.taxes += taxes;
     this_year.roads += road_upkeep;
     this_year.power += power_upkeep;
+    this_year.services += service_upkeep;
 }
 
 // Sound effects. Each is one short note on a 32blit audio channel: the
@@ -548,6 +643,7 @@ enum Sound {
     SOUND_MONTH,
     SOUND_MENU,
     SOUND_RANK,
+    SOUND_FIRE,
 };
 
 void play(Sound sound) {
@@ -559,6 +655,7 @@ void play(Sound sound) {
         {1, Waveform::TRIANGLE, 1320, 30, 0x2000}, // new month: soft tick
         {0, Waveform::TRIANGLE, 660,  40, 0x6000}, // menu
         {0, Waveform::SINE,    1046, 600, 0x8000}, // new rank: long bright note
+        {0, Waveform::NOISE,    200, 500, 0x9000}, // fire: low roar
     };
     const Note &n = notes[sound];
     AudioChannel &ch = channels[n.channel];
@@ -682,13 +779,13 @@ void render_title() {
     }
 }
 
-const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "SAVE + TITLE"};
-constexpr int PAUSE_ITEMS = 4;
-enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_SAVE};
+const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "DISASTERS", "SAVE + TITLE"};
+constexpr int PAUSE_ITEMS = 5;
+enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_DISASTERS, PAUSE_SAVE};
 
 // The pause menu, drawn as a box over the frozen city.
 void render_pause() {
-    Rect box(14, 24, screen.bounds.w - 28, 76);
+    Rect box(14, 18, screen.bounds.w - 28, 88);
     screen.pen = Pen(0, 0, 0);
     screen.rectangle(box);
     screen.pen = Pen(255, 255, 255);
@@ -696,7 +793,9 @@ void render_pause() {
 
     // show the current speed in the SPEED line
     std::string speed_line = std::string("SPEED: ") + speed_names[speed];
-    const char *items[PAUSE_ITEMS] = {pause_items[0], speed_line.c_str(), pause_items[2], pause_items[3]};
+    std::string disasters_line = std::string("DISASTERS: ") + (disasters ? "ON" : "OFF");
+    const char *items[PAUSE_ITEMS] = {pause_items[0], speed_line.c_str(), pause_items[2],
+                                      disasters_line.c_str(), pause_items[4]};
     render_menu(items, PAUSE_ITEMS, box.y + 20);
 }
 
@@ -724,7 +823,8 @@ void render_budget() {
         "TAXES      " + signed_money(b.taxes),
         "ROADS      -$" + std::to_string(b.roads),
         "POWER      -$" + std::to_string(b.power),
-        "TOTAL      " + signed_money(b.taxes - b.roads - b.power),
+        "SERVICES   -$" + std::to_string(b.services),
+        "TOTAL      " + signed_money(b.taxes - b.roads - b.power - b.services),
         "",
         "LEFT/RIGHT: TAX RATE",
         "A/B: BACK",
@@ -813,13 +913,19 @@ void render_city(uint32_t time) {
                 case TILE_POWER_LINE:  sprite = SPRITE_POWER_LINE + power_mask(mx, my); break;
                 case TILE_POWER_PLANT: sprite = SPRITE_POWER_PLANT + level[my][mx]; break;
                 case TILE_PARK:        sprite = SPRITE_PARK; break;
+                case TILE_FIRE_STATION: sprite = SPRITE_FIRE_STATION; break;
                 case TILE_GRASS:
                 default:               sprite = SPRITE_GRASS; break;
             }
             screen.sprite(sprite, Point(sx * TILE_SIZE, sy * TILE_SIZE));
 
+            // flames over burning buildings, flickering left and right
+            if(fire[my][mx] > 0) {
+                screen.sprite(SPRITE_FIRE, Point(sx * TILE_SIZE, sy * TILE_SIZE),
+                              (time / 200) % 2 ? SpriteTransform::HORIZONTAL : SpriteTransform::NONE);
+            }
             // zones without power blink a bolt, half a second on, half off
-            if(is_zone(map[my][mx]) && !powered[my][mx] && (time / 500) % 2 == 0) {
+            else if(is_zone(map[my][mx]) && !powered[my][mx] && (time / 500) % 2 == 0) {
                 screen.sprite(SPRITE_NO_POWER, Point(sx * TILE_SIZE, sy * TILE_SIZE));
             }
 
@@ -945,6 +1051,11 @@ void update_pause() {
     if(on_speed && (buttons.pressed & Button::DPAD_LEFT)) {
         speed = Speed((speed + SPEED_COUNT - 1) % SPEED_COUNT);
     }
+    bool on_disasters = menu_choice == PAUSE_DISASTERS;
+    if(on_disasters && (buttons.pressed & (Button::A | Button::DPAD_LEFT | Button::DPAD_RIGHT))) {
+        disasters = !disasters;
+        if(!disasters) memset(fire, 0, sizeof(fire)); // off means off: put out every fire
+    }
 
     if(buttons.pressed & Button::A) {
         if(menu_choice == PAUSE_RESUME) {
@@ -991,6 +1102,9 @@ void use_tool(uint32_t time) {
         case TOOL_PARK:
             if(tile == TILE_GRASS) tile = TILE_PARK;
             break;
+        case TOOL_FIRE_STATION:
+            if(tile == TILE_GRASS) tile = TILE_FIRE_STATION;
+            break;
         case TOOL_POWER_PLANT:
             // the cursor is the top-left of a 2x2 plant; all four tiles must be grass
             if(cursor.x < MAP_W - 1 && cursor.y < MAP_H - 1
@@ -1015,6 +1129,7 @@ void use_tool(uint32_t time) {
             }
             tile = TILE_GRASS;
             level[cursor.y][cursor.x] = 0;
+            fire[cursor.y][cursor.x] = 0;
             break;
         default:
             break;
@@ -1120,7 +1235,13 @@ void update(uint32_t time) {
     } else if(time - last_month_time >= month_ms[speed]) {
         last_month_time = time;
         month++;
+        bool new_fire = update_fires();
         simulate();
+        if(new_fire) {
+            message = "FIRE!";
+            message_time = time;
+            play(SOUND_FIRE);
+        }
 
         // a new rank: tell the player, and at the top rank show the win screen
         int new_rank = rank_for(population);
