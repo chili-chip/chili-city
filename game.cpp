@@ -212,6 +212,7 @@ enum Screen {
     SCREEN_BUDGET,
     SCREEN_WON,
     SCREEN_MINIMAP,
+    SCREEN_HELP,
 };
 Screen current_screen = SCREEN_TITLE;
 
@@ -238,6 +239,71 @@ int rank_for(int people) {
     while(r < RANK_CAPITAL && people >= rank_population[r + 1]) r++;
     return r;
 }
+
+// First-game hints: in a new city, a box at the top of the screen walks
+// through the first steps. Each step ends when its goal is met.
+enum HintStep {
+    HINT_ROAD = 0,
+    HINT_HOMES,
+    HINT_PLANT,
+    HINT_POWER,
+    HINT_JOBS,
+    HINT_DONE, // keep last; also used for loaded cities: no hints
+};
+HintStep hint_step = HINT_DONE;
+const char *hint_lines[HINT_DONE][2] = {
+    {"A: BUILD A ROAD", "HOLD A + MOVE: LONGER"},
+    {"B: PICK RES ZONE", "BUILD IT BY THE ROAD"},
+    {"B: PICK PLANT ($1500)", "BUILD IT ON GRASS"},
+    {"LINK PLANT AND ZONES", "WITH POWER LINES"},
+    {"HOMES GROW! ADD COM", "AND IND ZONES FOR JOBS"},
+};
+constexpr int HINT_DONE_POPULATION = 100; // the last hint stays until then
+
+// HELP in the pause menu: pages of controls and rules, left/right to turn.
+int help_page = 0;
+constexpr int HELP_PAGES = 3;
+const char *help_text[HELP_PAGES][11] = {
+    {
+        "CONTROLS        1/3",
+        "",
+        "D-PAD  MOVE CURSOR",
+        "A      BUILD",
+        "  HOLD A + MOVE: PAINT",
+        "B      NEXT TOOL",
+        "X      OVERLAY",
+        "Y      STATS",
+        "MENU   PAUSE MENU",
+        "",
+        "",
+    },
+    {
+        "HOW TO PLAY     2/3",
+        "",
+        "ZONES ONLY GROW NEXT",
+        "TO A ROAD, WITH POWER.",
+        "A PLANT POWERS ZONES",
+        "LINKED BY LINES OR",
+        "BY OTHER ZONES.",
+        "R C I METER: GREEN =",
+        "CITY WANTS MORE OF IT,",
+        "RED = TOO MUCH.",
+        "",
+    },
+    {
+        "TIPS            3/3",
+        "",
+        "FACTORIES POLLUTE:",
+        "KEEP HOMES AWAY.",
+        "PARKS RAISE LAND VALUE",
+        "FIRE AND POLICE",
+        "STATIONS GUARD 6 TILES",
+        "HIGH TAX SLOWS GROWTH",
+        "",
+        "GOAL: 10000 PEOPLE",
+        "",
+    },
+};
 
 // A short message in a box over the map, like "NOW A TOWN!".
 std::string message;
@@ -525,6 +591,7 @@ bool load_city() {
     count_city();
     rank = save.rank >= 0 ? std::min(int(save.rank), RANK_CAPITAL) : rank_for(population);
     message = "";
+    hint_step = HINT_DONE; // a saved city needs no first-game hints
     return true;
 }
 
@@ -546,6 +613,7 @@ void new_city() {
     have_last_year = false;
     rank = 0;
     message = "";
+    hint_step = HINT_ROAD;
     cursor = Point(0, 0);
     camera = Point(0, 0);
     count_city();
@@ -846,13 +914,13 @@ void render_title() {
     }
 }
 
-const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "MINIMAP", "DISASTERS", "SAVE + TITLE"};
-constexpr int PAUSE_ITEMS = 6;
-enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_MINIMAP, PAUSE_DISASTERS, PAUSE_SAVE};
+const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "MINIMAP", "DISASTERS", "HELP", "SAVE + TITLE"};
+constexpr int PAUSE_ITEMS = 7;
+enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_MINIMAP, PAUSE_DISASTERS, PAUSE_HELP, PAUSE_SAVE};
 
 // The pause menu, drawn as a box over the frozen city.
 void render_pause() {
-    Rect box(14, 12, screen.bounds.w - 28, 100);
+    Rect box(14, 6, screen.bounds.w - 28, 112);
     screen.pen = Pen(0, 0, 0);
     screen.rectangle(box);
     screen.pen = Pen(255, 255, 255);
@@ -862,7 +930,8 @@ void render_pause() {
     std::string speed_line = std::string("SPEED: ") + speed_names[speed];
     std::string disasters_line = std::string("DISASTERS: ") + (disasters ? "ON" : "OFF");
     const char *items[PAUSE_ITEMS] = {pause_items[0], speed_line.c_str(), pause_items[2],
-                                      pause_items[3], disasters_line.c_str(), pause_items[5]};
+                                      pause_items[3], disasters_line.c_str(), pause_items[5],
+                                      pause_items[6]};
     render_menu(items, PAUSE_ITEMS, box.y + 20);
 }
 
@@ -906,6 +975,7 @@ void render_budget() {
 void render_city(uint32_t time);
 void render_won();
 void render_minimap(uint32_t time);
+void render_help();
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -953,6 +1023,9 @@ void render(uint32_t time) {
             break;
         case SCREEN_MINIMAP:
             render_minimap(time);
+            break;
+        case SCREEN_HELP:
+            render_help();
             break;
         case SCREEN_CITY:
             if(show_stats) {
@@ -1053,6 +1126,18 @@ void render_city(uint32_t time) {
         label("SAVED", Point(0, 9), TextAlign::top_left);
     }
 
+    // first-game hint: two lines in a box under the top labels
+    if(hint_step < HINT_DONE) {
+        Rect box(0, 18, screen.bounds.w, 20);
+        screen.pen = Pen(0, 0, 0, 200);
+        screen.rectangle(box);
+        screen.pen = Pen(255, 200, 0);
+        for(int i = 0; i < 2; i++) {
+            screen.text(hint_lines[hint_step][i], minimal_font,
+                        Point(screen.bounds.w / 2, box.y + 2 + i * 9), true, TextAlign::top_center);
+        }
+    }
+
     // a message box in the middle of the screen for a few seconds
     if(!message.empty() && time - message_time < MESSAGE_MS) {
         Size size = screen.measure_text(message, minimal_font);
@@ -1107,6 +1192,19 @@ void render_minimap(uint32_t time) {
     }
 
     label("A: GO  B: BACK", Point(0, screen.bounds.h), TextAlign::bottom_left);
+}
+
+void render_help() {
+    screen.pen = Pen(0, 0, 40);
+    screen.clear();
+    screen.pen = Pen(255, 255, 255);
+    int y = 4;
+    for(auto line : help_text[help_page]) {
+        screen.text(line, minimal_font, Point(4, y));
+        y += 10;
+    }
+    screen.pen = Pen(150, 150, 150);
+    screen.text("< > PAGE   A/B: BACK", minimal_font, Point(4, screen.bounds.h - 10));
 }
 
 // Shown once, when the city becomes a capital. The game goes on after it.
@@ -1182,6 +1280,9 @@ void update_pause() {
             current_screen = SCREEN_CITY;
         } else if(menu_choice == PAUSE_BUDGET) {
             current_screen = SCREEN_BUDGET;
+        } else if(menu_choice == PAUSE_HELP) {
+            help_page = 0;
+            current_screen = SCREEN_HELP;
         } else if(menu_choice == PAUSE_MINIMAP) {
             minimap_view = camera;
             current_screen = SCREEN_MINIMAP;
@@ -1311,6 +1412,43 @@ void update_minimap(uint32_t time) {
     }
 }
 
+// Left and right turn the pages; A or B go back to the pause menu.
+void update_help() {
+    if(buttons.pressed & Button::DPAD_LEFT)  help_page = (help_page + HELP_PAGES - 1) % HELP_PAGES;
+    if(buttons.pressed & Button::DPAD_RIGHT) help_page = (help_page + 1) % HELP_PAGES;
+    if(buttons.pressed & (Button::DPAD_LEFT | Button::DPAD_RIGHT | Button::A | Button::B | Button::MENU)) {
+        play(SOUND_MENU);
+    }
+    if(buttons.pressed & (Button::A | Button::B | Button::MENU)) {
+        current_screen = SCREEN_PAUSE;
+    }
+}
+
+// Moves the first-game hints on once the player has done each step.
+void update_hints() {
+    bool done = false;
+    switch(hint_step) {
+        case HINT_ROAD:  done = road_count > 0; break;
+        case HINT_PLANT: done = plant_count > 0; break;
+        case HINT_JOBS:  done = population >= HINT_DONE_POPULATION; break;
+        case HINT_HOMES:
+        case HINT_POWER:
+            // any residential zone (homes), or any powered zone (power)
+            for(int y = 0; y < MAP_H && !done; y++) {
+                for(int x = 0; x < MAP_W && !done; x++) {
+                    done = hint_step == HINT_HOMES ? map[y][x] == TILE_RESIDENTIAL
+                                                   : is_zone(map[y][x]) && powered[y][x];
+                }
+            }
+            break;
+        default:
+            break;
+    }
+    if(done) {
+        hint_step = HintStep(hint_step + 1);
+    }
+}
+
 // Left and right change the tax rate; A or B go back to the pause menu.
 void update_budget() {
     if(buttons.pressed & Button::DPAD_LEFT)  tax_rate = std::max(0, tax_rate - 1);
@@ -1349,6 +1487,10 @@ void update(uint32_t time) {
             update_minimap(time);
             last_month_time = time;
             return;
+        case SCREEN_HELP:
+            update_help();
+            last_month_time = time;
+            return;
         case SCREEN_WON:
             if(buttons.pressed & Button::A) {
                 current_screen = SCREEN_CITY;
@@ -1358,6 +1500,10 @@ void update(uint32_t time) {
             return;
         case SCREEN_CITY:
             break;
+    }
+
+    if(hint_step < HINT_DONE) {
+        update_hints();
     }
 
     // MENU: pause menu

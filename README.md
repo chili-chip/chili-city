@@ -47,8 +47,9 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 - Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Disasters can be turned off in the pause menu.
 - **Crime** grows where homes and shops are crowded together. Homes don't grow in high crime, and crime lowers land value. A **police station** cuts crime to a quarter within 6 tiles.
 - The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
-- The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast), open the budget or the minimap, turn disasters off, or save and go back to the title.
+- The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast), open the budget, the minimap or the help, turn disasters off, or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
+- A new city shows short **hints** at the top of the screen for the first steps (road, homes, power plant, power lines, jobs). **HELP** in the pause menu has the controls and the rules.
 - The city autosaves every January (a game year is 24 seconds at normal speed) and is offered as **CONTINUE** on the title screen.
 
 ## Controls
