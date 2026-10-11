@@ -441,6 +441,40 @@ void simulate() {
     money += last_income;
 }
 
+// Sound effects. Each is one short note on a 32blit audio channel: the
+// note starts with trigger_attack() and fades out over decay_ms because
+// sustain is 0. Actions use channel 0; the quiet month tick uses channel 1
+// so it never cuts off a build sound.
+enum Sound {
+    SOUND_BUILD,
+    SOUND_BULLDOZE,
+    SOUND_BROKE,
+    SOUND_MONTH,
+    SOUND_MENU,
+};
+
+void play(Sound sound) {
+    struct Note { int channel; uint8_t waveform; uint16_t frequency; uint16_t decay_ms; uint16_t volume; };
+    const Note notes[] = {
+        {0, Waveform::SQUARE,   880,  80, 0x6000}, // build: short high blip
+        {0, Waveform::NOISE,    600, 150, 0x8000}, // bulldoze: crunch
+        {0, Waveform::SQUARE,   110, 250, 0x8000}, // not enough money: low buzz
+        {1, Waveform::TRIANGLE, 1320, 30, 0x2000}, // new month: soft tick
+        {0, Waveform::TRIANGLE, 660,  40, 0x6000}, // menu
+    };
+    const Note &n = notes[sound];
+    AudioChannel &ch = channels[n.channel];
+    ch.off();
+    ch.waveforms = n.waveform;
+    ch.frequency = n.frequency;
+    ch.volume = n.volume;
+    ch.attack_ms = 2;
+    ch.decay_ms = n.decay_ms;
+    ch.sustain = 0;
+    ch.release_ms = 10;
+    ch.trigger_attack();
+}
+
 // Draws white text on a black box. align says which corner p is.
 void label(std::string_view text, Point p, TextAlign align, Pen colour = Pen(255, 255, 255)) {
     Size size = screen.measure_text(text, minimal_font);
@@ -698,6 +732,9 @@ void render_city(uint32_t time) {
 void move_menu_choice(int count) {
     if(buttons.pressed & Button::DPAD_UP)   menu_choice = (menu_choice + count - 1) % count;
     if(buttons.pressed & Button::DPAD_DOWN) menu_choice = (menu_choice + 1) % count;
+    if(buttons.pressed & (Button::DPAD_UP | Button::DPAD_DOWN | Button::A)) {
+        play(SOUND_MENU);
+    }
 }
 
 void update_title() {
@@ -799,6 +836,7 @@ void update(uint32_t time) {
         last_month_time = time;
         month++;
         simulate();
+        play(SOUND_MONTH);
 
         // autosave once a year, every January. Not every month: on the
         // console the save lives in flash, which wears out with writes.
@@ -835,6 +873,7 @@ void update(uint32_t time) {
         if(money < cost) {
             was_broke = true;
             broke_time = time;
+            play(SOUND_BROKE);
             return;
         }
         switch(tool) {
@@ -888,6 +927,8 @@ void update(uint32_t time) {
         // only pay when something actually changed
         if(tile != before) {
             money -= cost;
+            play(tool == TOOL_BULLDOZER ? SOUND_BULLDOZE : SOUND_BUILD);
+
             // so the no-power bolts and overlays update right away
             update_power();
             update_land();
