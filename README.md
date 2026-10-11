@@ -8,6 +8,17 @@ A tiny SimCity-like city builder for the [VGC Zero](https://chilichip.eu) handhe
 
 Lay roads, zone land for homes, shops and factories, and watch the city grow month by month while you keep the budget out of the red.
 
+**Goal:** grow your hamlet into a capital. Each rank is reached by population:
+
+| Rank | Population |
+|---|---|
+| Village | 500 |
+| Town | 2000 |
+| City | 5000 |
+| Capital | 10000 |
+
+Reaching Capital wins the game; you can keep building afterwards. Your rank shows on the stats screen (Y).
+
 ## How to play
 
 - The map is 32×32 tiles; the screen shows 16×16 and scrolls with the cursor.
