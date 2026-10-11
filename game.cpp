@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -22,6 +24,7 @@ enum Tile : uint8_t {
     TILE_INDUSTRIAL,
     TILE_POWER_LINE,
     TILE_POWER_PLANT, // 2x2; level[][] holds which quarter (0..3)
+    TILE_PARK,
 };
 
 // Where each tile's picture is in assets/tiles.png. The sheet is 8 sprites
@@ -34,6 +37,7 @@ constexpr int SPRITE_INDUSTRIAL = 48;  // + level
 constexpr int SPRITE_POWER_LINE = 56;  // + which neighbours carry power (0..15)
 constexpr int SPRITE_POWER_PLANT = 72; // + quarter: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
 constexpr int SPRITE_NO_POWER = 76;    // bolt drawn over zones without power
+constexpr int SPRITE_PARK = 77;
 
 // What pressing A does. B switches to the next tool.
 enum Tool {
@@ -43,6 +47,7 @@ enum Tool {
     TOOL_INDUSTRIAL,
     TOOL_POWER_LINE,
     TOOL_POWER_PLANT,
+    TOOL_PARK,
     TOOL_BULLDOZER,
     TOOL_COUNT, // number of tools, keep last
 };
@@ -55,6 +60,7 @@ const int tool_costs[TOOL_COUNT] = {
     50, // industrial zone
     5,  // power line
     1500, // power plant
+    20, // park
     5,  // bulldozer
 };
 
@@ -65,6 +71,7 @@ const char *tool_names[TOOL_COUNT] = {
     "IND ZONE",
     "POWER LINE",
     "PLANT",
+    "PARK",
     "BULLDOZE",
 };
 
@@ -79,6 +86,29 @@ uint8_t level[MAP_H][MAP_W];
 
 // Which tiles get electricity, worked out by update_power().
 bool powered[MAP_H][MAP_W];
+
+// Smog from industry and how nice each tile is to live on, 0..255,
+// worked out by update_land(). Homes care about both.
+uint8_t pollution[MAP_H][MAP_W];
+uint8_t land_value[MAP_H][MAP_W];
+
+// Homes stop growing at this much pollution, and lose a level at the second.
+constexpr int POLLUTION_NO_GROWTH = 40;
+constexpr int POLLUTION_DECLINE = 80;
+
+// Land value without parks or pollution. Parks push it up, smog down.
+constexpr int BASE_LAND_VALUE = 100;
+constexpr int GOOD_LAND_VALUE = 120; // from here homes grow faster
+
+// X cycles what is drawn over the map: nothing, pollution, land value.
+enum Overlay {
+    OVERLAY_NONE = 0,
+    OVERLAY_POLLUTION,
+    OVERLAY_LAND_VALUE,
+    OVERLAY_COUNT, // keep last
+};
+Overlay overlay = OVERLAY_NONE;
+const char *overlay_names[OVERLAY_COUNT] = {"", "POLLUTION", "LAND VALUE"};
 
 // People living on one residential level.
 constexpr int PEOPLE_PER_LEVEL = 20;
@@ -210,6 +240,47 @@ void update_power() {
     }
 }
 
+// Adds amount - falloff * distance to every tile within reach of (cx, cy),
+// clamped to 0..255. Distance is counted in steps (up/down/left/right).
+void spread(uint8_t grid[MAP_H][MAP_W], int cx, int cy, int amount, int falloff) {
+    int reach = amount / falloff;
+    for(int y = cy - reach; y <= cy + reach; y++) {
+        for(int x = cx - reach; x <= cx + reach; x++) {
+            if(x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) continue;
+            int dist = abs(x - cx) + abs(y - cy);
+            int add = amount - falloff * dist;
+            if(add <= 0) continue;
+            grid[y][x] = std::min(255, grid[y][x] + add);
+        }
+    }
+}
+
+// Industry pollutes around it, more the bigger it is. Parks raise land
+// value around them; pollution lowers it.
+void update_land() {
+    static uint8_t park_bonus[MAP_H][MAP_W];
+    memset(pollution, 0, sizeof(pollution));
+    memset(park_bonus, 0, sizeof(park_bonus));
+
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            if(map[y][x] == TILE_INDUSTRIAL && level[y][x] > 0) {
+                // level 3 next door: 120 - 20 = 100, enough to drive homes out
+                spread(pollution, x, y, level[y][x] * 40, 20);
+            } else if(map[y][x] == TILE_PARK) {
+                spread(park_bonus, x, y, 30, 10);
+            }
+        }
+    }
+
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            int value = BASE_LAND_VALUE + park_bonus[y][x] - pollution[y][x] / 2;
+            land_value[y][x] = std::max(0, std::min(255, value));
+        }
+    }
+}
+
 // Recounts the city totals shown on the HUD and the stats screen.
 void count_city() {
     res_levels = com_levels = ind_levels = road_count = 0;
@@ -227,6 +298,7 @@ void count_city() {
     population = res_levels * PEOPLE_PER_LEVEL;
 
     update_power();
+    update_land();
 }
 
 // What goes into the save file. read_save/write_save copy this struct
@@ -321,8 +393,16 @@ void simulate() {
                 if(lv > 0) lv--;
                 continue;
             }
+            // smog drives people out of their homes
+            if(tile == TILE_RESIDENTIAL && pollution[y][x] >= POLLUTION_DECLINE) {
+                if(lv > 0) lv--;
+                continue;
+            }
             if(lv >= MAX_LEVEL || !powered[y][x]) {
                 continue; // full, or no electricity: nobody moves in
+            }
+            if(tile == TILE_RESIDENTIAL && pollution[y][x] >= POLLUTION_NO_GROWTH) {
+                continue; // too smoggy to move in
             }
 
             bool demand = false;
@@ -341,8 +421,10 @@ void simulate() {
                     break;
             }
 
-            // grow slowly and unevenly: a one in three chance each month
-            if(demand && blit::random() % 3 == 0) {
+            // grow slowly and unevenly: a one in three chance each month,
+            // one in two for homes on good land (near parks, away from smog)
+            int odds = (tile == TILE_RESIDENTIAL && land_value[y][x] >= GOOD_LAND_VALUE) ? 2 : 3;
+            if(demand && blit::random() % odds == 0) {
                 lv++;
             }
         }
@@ -517,6 +599,7 @@ void render_city(uint32_t time) {
                 case TILE_INDUSTRIAL:  sprite = SPRITE_INDUSTRIAL + level[my][mx]; break;
                 case TILE_POWER_LINE:  sprite = SPRITE_POWER_LINE + power_mask(mx, my); break;
                 case TILE_POWER_PLANT: sprite = SPRITE_POWER_PLANT + level[my][mx]; break;
+                case TILE_PARK:        sprite = SPRITE_PARK; break;
                 case TILE_GRASS:
                 default:               sprite = SPRITE_GRASS; break;
             }
@@ -525,6 +608,23 @@ void render_city(uint32_t time) {
             // zones without power blink a bolt, half a second on, half off
             if(is_zone(map[my][mx]) && !powered[my][mx] && (time / 500) % 2 == 0) {
                 screen.sprite(SPRITE_NO_POWER, Point(sx * TILE_SIZE, sy * TILE_SIZE));
+            }
+
+            // overlay: a see-through colour on every tile
+            Rect r(sx * TILE_SIZE, sy * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            if(overlay == OVERLAY_POLLUTION && pollution[my][mx] > 0) {
+                screen.pen = Pen(120, 70, 20, std::min(220, pollution[my][mx] * 2));
+                screen.rectangle(r);
+            } else if(overlay == OVERLAY_LAND_VALUE) {
+                // red below the base value, green above it
+                int diff = land_value[my][mx] - BASE_LAND_VALUE;
+                if(diff < 0) {
+                    screen.pen = Pen(220, 40, 40, std::min(220, -diff * 4));
+                    screen.rectangle(r);
+                } else if(diff > 0) {
+                    screen.pen = Pen(40, 220, 255, std::min(220, diff * 6));
+                    screen.rectangle(r);
+                }
             }
         }
     }
@@ -544,6 +644,9 @@ void render_city(uint32_t time) {
     label("$" + std::to_string(money), Point(0, 0), TextAlign::top_left,
           flash ? Pen(255, 60, 60) : Pen(255, 255, 255));
     label("POP " + std::to_string(population), Point(screen.bounds.w, 0), TextAlign::top_right);
+    if(overlay != OVERLAY_NONE) {
+        label(overlay_names[overlay], Point(screen.bounds.w, 9), TextAlign::top_right);
+    }
     label(std::string(tool_names[tool]) + " $" + std::to_string(tool_costs[tool]),
           Point(0, screen.bounds.h), TextAlign::bottom_left);
     label(std::string(month_names[month % 12]) + " " + std::to_string(1900 + month / 12),
@@ -678,6 +781,11 @@ void update(uint32_t time) {
         return; // the city keeps running, but the map controls are off
     }
 
+    // X: next overlay, wrapping back to none
+    if(buttons.pressed & Button::X) {
+        overlay = Overlay((overlay + 1) % OVERLAY_COUNT);
+    }
+
     // B: next tool, wrapping back to the first one
     if(buttons.pressed & Button::B) {
         tool = Tool((tool + 1) % TOOL_COUNT);
@@ -710,6 +818,9 @@ void update(uint32_t time) {
             case TOOL_POWER_LINE:
                 if(tile == TILE_GRASS) tile = TILE_POWER_LINE;
                 break;
+            case TOOL_PARK:
+                if(tile == TILE_GRASS) tile = TILE_PARK;
+                break;
             case TOOL_POWER_PLANT:
                 // the cursor is the top-left of a 2x2 plant; all four tiles must be grass
                 if(cursor.x < MAP_W - 1 && cursor.y < MAP_H - 1
@@ -741,7 +852,9 @@ void update(uint32_t time) {
         // only pay when something actually changed
         if(tile != before) {
             money -= cost;
-            update_power(); // so the no-power bolts update right away
+            // so the no-power bolts and overlays update right away
+            update_power();
+            update_land();
         }
     }
 }
