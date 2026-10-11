@@ -18,6 +18,7 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
   - **Industrial** grows when there are enough residents to work, and pollutes the tiles around it: the bigger the factory, the further the smog reaches. Homes in smog stop growing, and in heavy smog they shrink.
   - **Parks** raise land value around them. Homes on high land value grow faster.
   - Press **X** to look at the pollution or land value overlay.
+- The **R C I** meter in the bottom-left corner shows demand: a green bar up means the city wants more of that zone, a red bar down means it has too much.
 - You start with **$5000**. Building costs money:
 
   | Tool | Cost |

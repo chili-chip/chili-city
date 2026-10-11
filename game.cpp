@@ -362,6 +362,18 @@ void new_city() {
     count_city();
 }
 
+// How much the city wants more of each zone, from its building levels.
+// Above 0 means that zone grows; the HUD meter shows the same numbers.
+int res_demand(int res, int com, int ind) {
+    return com + ind + 4 - res; // people move in when there are jobs; the first few come anyway
+}
+int com_demand(int res, int com) {
+    return res - com * 2;       // shops need customers
+}
+int ind_demand(int res, int ind) {
+    return res - ind;           // factories need workers
+}
+
 // One month of city life: zones next to roads grow when there is demand,
 // zones cut off from roads shrink.
 void simulate() {
@@ -407,18 +419,9 @@ void simulate() {
 
             bool demand = false;
             switch(tile) {
-                case TILE_RESIDENTIAL:
-                    // people move in when there are jobs; the first few come anyway
-                    demand = res < com + ind + 4;
-                    break;
-                case TILE_COMMERCIAL:
-                    // shops need customers
-                    demand = res > com * 2;
-                    break;
-                case TILE_INDUSTRIAL:
-                    // factories need workers
-                    demand = res > ind;
-                    break;
+                case TILE_RESIDENTIAL: demand = res_demand(res, com, ind) > 0; break;
+                case TILE_COMMERCIAL:  demand = com_demand(res, com) > 0; break;
+                case TILE_INDUSTRIAL:  demand = ind_demand(res, ind) > 0; break;
             }
 
             // grow slowly and unevenly: a one in three chance each month,
@@ -473,6 +476,37 @@ void render_stats() {
     for(auto &line : lines) {
         screen.text(line, minimal_font, Point(4, y));
         y += 9;
+    }
+}
+
+// The classic R C I demand meter: a bar per zone, up (green) when the
+// city wants more of it, down (red) when it has too much.
+void render_demand() {
+    int demand[3] = {
+        res_demand(res_levels, com_levels, ind_levels),
+        com_demand(res_levels, com_levels),
+        ind_demand(res_levels, ind_levels),
+    };
+    const char *letters[3] = {"R", "C", "I"};
+
+    Rect box(0, screen.bounds.h - 9 - 24, 23, 24);
+    screen.pen = Pen(0, 0, 0);
+    screen.rectangle(box);
+    int middle = box.y + 15; // bars grow up and down from here, 7 px each way
+    for(int i = 0; i < 3; i++) {
+        int x = box.x + 2 + i * 7;
+        screen.pen = Pen(255, 255, 255);
+        screen.text(letters[i], minimal_font, Point(x, box.y + 1));
+        int h = std::max(-7, std::min(7, demand[i]));
+        if(h > 0) {
+            screen.pen = Pen(60, 220, 60);
+            screen.rectangle(Rect(x, middle - h, 5, h));
+        } else if(h < 0) {
+            screen.pen = Pen(220, 60, 60);
+            screen.rectangle(Rect(x, middle, 5, -h));
+        }
+        screen.pen = Pen(120, 120, 120);
+        screen.rectangle(Rect(x, middle, 5, 1)); // zero line
     }
 }
 
@@ -651,6 +685,8 @@ void render_city(uint32_t time) {
           Point(0, screen.bounds.h), TextAlign::bottom_left);
     label(std::string(month_names[month % 12]) + " " + std::to_string(1900 + month / 12),
           Point(screen.bounds.w, screen.bounds.h), TextAlign::bottom_right);
+
+    render_demand();
 
     // a short note after each autosave, just under the money
     if(was_saved && time - saved_time < 1000) {
