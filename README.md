@@ -11,7 +11,8 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
 ## How to play
 
 - The map is 32×32 tiles; the screen shows 16×16 and scrolls with the cursor.
-- Zones only grow when they touch a road.
+- Zones only grow when they touch a road **and have power**. Unpowered zones blink a yellow bolt.
+  - A **power plant** (2×2, placed with the cursor at its top-left corner) powers everything connected to it by **power lines** or by other zones: a zone passes power to the zone next to it. Roads do not carry power.
   - **Residential** grows when there are jobs (the first few homes fill up anyway).
   - **Commercial** grows when there are enough residents to shop.
   - **Industrial** grows when there are enough residents to work.
@@ -21,6 +22,8 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
   |---|---|
   | Road | $10 |
   | Residential / Commercial / Industrial zone | $50 |
+  | Power line | $5 |
+  | Power plant | $1500 |
   | Bulldoze | $5 |
 
 - Every month you collect taxes from residents and businesses and pay $1 upkeep per road tile.
@@ -82,6 +85,9 @@ All graphics are 8×8 sprites in `assets/tiles.png` (8 sprites per row):
 | 32–35 | residential, levels 0–3 |
 | 40–43 | commercial, levels 0–3 |
 | 48–51 | industrial, levels 0–3 |
+| 56–71 | power line, picked by which neighbours carry power (same bits as roads) |
+| 72–75 | power plant: top-left, top-right, bottom-left, bottom-right quarter |
+| 76 | "no power" bolt, drawn over unpowered zones (transparent background) |
 
 Redraw them in any pixel editor; keep the layout and the game picks them up.
 
