@@ -1,3 +1,4 @@
+#include <cstring>
 #include <string>
 
 #include "game.hpp"
@@ -120,6 +121,68 @@ int road_mask(int x, int y) {
     return mask;
 }
 
+// Recounts the city totals shown on the HUD and the stats screen.
+void count_city() {
+    res_levels = com_levels = ind_levels = road_count = 0;
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            switch(map[y][x]) {
+                case TILE_RESIDENTIAL: res_levels += level[y][x]; break;
+                case TILE_COMMERCIAL:  com_levels += level[y][x]; break;
+                case TILE_INDUSTRIAL:  ind_levels += level[y][x]; break;
+                case TILE_ROAD:        road_count++; break;
+                default: break;
+            }
+        }
+    }
+    population = res_levels * PEOPLE_PER_LEVEL;
+}
+
+// What goes into the save file. read_save/write_save copy this struct
+// byte for byte, so magic and version let us spot a file from another
+// game or an older layout and ignore it.
+constexpr uint32_t SAVE_MAGIC = 0x59544943; // "CITY"
+constexpr uint8_t SAVE_VERSION = 1;
+
+struct SaveData {
+    uint32_t magic;
+    uint8_t version;
+    uint8_t map[MAP_H][MAP_W];
+    uint8_t level[MAP_H][MAP_W];
+    int32_t money;
+    int32_t month;
+};
+
+// When the city was last saved, to show "SAVED" on the HUD for a moment.
+uint32_t saved_time = 0;
+bool was_saved = false;
+
+void save_city() {
+    // static: about 2 KB, better kept off the stack
+    static SaveData save;
+    save.magic = SAVE_MAGIC;
+    save.version = SAVE_VERSION;
+    memcpy(save.map, map, sizeof(map));
+    memcpy(save.level, level, sizeof(level));
+    save.money = money;
+    save.month = month;
+    write_save(save);
+}
+
+// Returns false when there is no usable save, so the game starts fresh.
+bool load_city() {
+    static SaveData save;
+    if(!read_save(save) || save.magic != SAVE_MAGIC || save.version != SAVE_VERSION) {
+        return false;
+    }
+    memcpy(map, save.map, sizeof(map));
+    memcpy(level, save.level, sizeof(level));
+    money = save.money;
+    month = save.month;
+    count_city();
+    return true;
+}
+
 // One month of city life: zones next to roads grow when there is demand,
 // zones cut off from roads shrink.
 void simulate() {
@@ -179,19 +242,7 @@ void simulate() {
     }
 
     // recount after growing, for the HUD and stats screen
-    res_levels = com_levels = ind_levels = road_count = 0;
-    for(int y = 0; y < MAP_H; y++) {
-        for(int x = 0; x < MAP_W; x++) {
-            switch(map[y][x]) {
-                case TILE_RESIDENTIAL: res_levels += level[y][x]; break;
-                case TILE_COMMERCIAL:  com_levels += level[y][x]; break;
-                case TILE_INDUSTRIAL:  ind_levels += level[y][x]; break;
-                case TILE_ROAD:        road_count++; break;
-                default: break;
-            }
-        }
-    }
-    population = res_levels * PEOPLE_PER_LEVEL;
+    count_city();
 
     // every road tile costs 1 a month to maintain
     last_income = taxes - road_count;
@@ -254,6 +305,9 @@ void init() {
             level[y][x] = 0;
         }
     }
+
+    // carry on with the saved city, if there is one
+    load_city();
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -313,6 +367,11 @@ void render(uint32_t time) {
           Point(0, screen.bounds.h), TextAlign::bottom_left);
     label(std::string(month_names[month % 12]) + " " + std::to_string(1900 + month / 12),
           Point(screen.bounds.w, screen.bounds.h), TextAlign::bottom_right);
+
+    // a short note after each autosave, just under the money
+    if(was_saved && time - saved_time < 1000) {
+        label("SAVED", Point(0, 9), TextAlign::top_left);
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -349,6 +408,14 @@ void update(uint32_t time) {
         last_month_time = time;
         month++;
         simulate();
+
+        // autosave once a year, every January. Not every month: on the
+        // console the save lives in flash, which wears out with writes.
+        if(month % 12 == 0) {
+            save_city();
+            was_saved = true;
+            saved_time = time;
+        }
     }
 
     // Y: stats screen on and off

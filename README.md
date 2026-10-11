@@ -25,6 +25,7 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
 
 - Every month you collect taxes from residents and businesses and pay $1 upkeep per road tile.
 - You can only build on grass. Bulldoze first to replace something.
+- The city autosaves every January (a game year is 24 seconds) and loads when the game starts. To start over, delete the save: the `save0` file under `.blit/` on the console's storage, or `~/.local/share/pablolambo/Chili City/save0` on Linux.
 
 ## Controls
 
