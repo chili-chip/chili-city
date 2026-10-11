@@ -15,17 +15,26 @@ constexpr int MAP_H = 32;
 enum Tile : uint8_t {
     TILE_GRASS = 0,
     TILE_ROAD,
+    TILE_RESIDENTIAL,
+    TILE_COMMERCIAL,
+    TILE_INDUSTRIAL,
 };
 
 // What pressing A does. B switches to the next tool.
 enum Tool {
     TOOL_ROAD = 0,
+    TOOL_RESIDENTIAL,
+    TOOL_COMMERCIAL,
+    TOOL_INDUSTRIAL,
     TOOL_BULLDOZER,
     TOOL_COUNT, // number of tools, keep last
 };
 
 const char *tool_names[TOOL_COUNT] = {
     "ROAD",
+    "RES ZONE",
+    "COM ZONE",
+    "IND ZONE",
     "BULLDOZE",
 };
 
@@ -79,6 +88,15 @@ void render(uint32_t time) {
             switch(map[my][mx]) {
                 case TILE_ROAD:
                     screen.pen = Pen(110, 110, 110);
+                    break;
+                case TILE_RESIDENTIAL:
+                    screen.pen = Pen(120, 220, 120);
+                    break;
+                case TILE_COMMERCIAL:
+                    screen.pen = Pen(80, 140, 230);
+                    break;
+                case TILE_INDUSTRIAL:
+                    screen.pen = Pen(230, 200, 60);
                     break;
                 case TILE_GRASS:
                 default:
@@ -163,8 +181,18 @@ void update(uint32_t time) {
     if(buttons.pressed & Button::A) {
         uint8_t &tile = map[cursor.y][cursor.x];
         switch(tool) {
+            // building only works on empty grass; bulldoze first to replace
             case TOOL_ROAD:
-                tile = TILE_ROAD;
+                if(tile == TILE_GRASS) tile = TILE_ROAD;
+                break;
+            case TOOL_RESIDENTIAL:
+                if(tile == TILE_GRASS) tile = TILE_RESIDENTIAL;
+                break;
+            case TOOL_COMMERCIAL:
+                if(tile == TILE_GRASS) tile = TILE_COMMERCIAL;
+                break;
+            case TOOL_INDUSTRIAL:
+                if(tile == TILE_GRASS) tile = TILE_INDUSTRIAL;
                 break;
             case TOOL_BULLDOZER:
                 tile = TILE_GRASS;
