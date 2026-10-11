@@ -30,6 +30,15 @@ enum Tool {
     TOOL_COUNT, // number of tools, keep last
 };
 
+// What each tool costs per use, in the same order as Tool.
+const int tool_costs[TOOL_COUNT] = {
+    10, // road
+    50, // residential zone
+    50, // commercial zone
+    50, // industrial zone
+    5,  // bulldozer
+};
+
 const char *tool_names[TOOL_COUNT] = {
     "ROAD",
     "RES ZONE",
@@ -53,9 +62,28 @@ constexpr int PEOPLE_PER_LEVEL = 20;
 // One game month in real milliseconds. The simulation runs once a month.
 constexpr uint32_t MONTH_MS = 2000;
 uint32_t last_month_time = 0;
-int month = 0;
+int month = 0; // months since January 1900
 
+const char *month_names[12] = {
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+};
+
+// City totals, recounted every month by simulate().
 int population = 0;
+int res_levels = 0, com_levels = 0, ind_levels = 0;
+int road_count = 0;
+
+// Money. Building costs money, taxes bring it in once a month.
+int money = 5000;
+int last_income = 0;    // taxes minus road upkeep last month
+
+// When the player last tried to build without enough money, to flash the HUD.
+uint32_t broke_time = 0;
+bool was_broke = false;
+
+// Y shows the stats screen instead of the map.
+bool show_stats = false;
 
 // Cursor position in map tiles, not pixels.
 Point cursor(0, 0);
@@ -87,6 +115,9 @@ void simulate() {
             }
         }
     }
+
+    // taxes are collected on last month's city, before it grows
+    int taxes = res * PEOPLE_PER_LEVEL / 4 + (com + ind) * 5;
 
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
@@ -127,13 +158,61 @@ void simulate() {
         }
     }
 
-    population = 0;
+    // recount after growing, for the HUD and stats screen
+    res_levels = com_levels = ind_levels = road_count = 0;
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
-            if(map[y][x] == TILE_RESIDENTIAL) {
-                population += level[y][x] * PEOPLE_PER_LEVEL;
+            switch(map[y][x]) {
+                case TILE_RESIDENTIAL: res_levels += level[y][x]; break;
+                case TILE_COMMERCIAL:  com_levels += level[y][x]; break;
+                case TILE_INDUSTRIAL:  ind_levels += level[y][x]; break;
+                case TILE_ROAD:        road_count++; break;
+                default: break;
             }
         }
+    }
+    population = res_levels * PEOPLE_PER_LEVEL;
+
+    // every road tile costs 1 a month to maintain
+    last_income = taxes - road_count;
+    money += last_income;
+}
+
+// Draws white text on a black box. align says which corner p is.
+void label(std::string_view text, Point p, TextAlign align, Pen colour = Pen(255, 255, 255)) {
+    Size size = screen.measure_text(text, minimal_font);
+    if(align & TextAlign::right)  p.x -= size.w + 2;
+    if(align & TextAlign::bottom) p.y -= size.h + 2;
+    screen.pen = Pen(0, 0, 0);
+    screen.rectangle(Rect(p.x, p.y, size.w + 2, size.h + 2));
+    screen.pen = colour;
+    screen.text(text, minimal_font, Point(p.x + 1, p.y + 1));
+}
+
+void render_stats() {
+    screen.pen = Pen(0, 0, 40);
+    screen.clear();
+    screen.pen = Pen(255, 255, 255);
+
+    std::string lines[] = {
+        "CHILI CITY",
+        "",
+        std::string(month_names[month % 12]) + " " + std::to_string(1900 + month / 12),
+        "MONEY  $" + std::to_string(money),
+        "INCOME $" + std::to_string(last_income) + "/MONTH",
+        "",
+        "POPULATION " + std::to_string(population),
+        "RES LEVELS " + std::to_string(res_levels),
+        "COM LEVELS " + std::to_string(com_levels),
+        "IND LEVELS " + std::to_string(ind_levels),
+        "ROADS      " + std::to_string(road_count),
+        "",
+        "Y: BACK TO MAP",
+    };
+    int y = 4;
+    for(auto &line : lines) {
+        screen.text(line, minimal_font, Point(4, y));
+        y += 9;
     }
 }
 
@@ -164,6 +243,11 @@ void init() {
 void render(uint32_t time) {
     screen.alpha = 255;
     screen.mask = nullptr;
+
+    if(show_stats) {
+        render_stats();
+        return;
+    }
 
     int view_w = screen.bounds.w / TILE_SIZE;
     int view_h = screen.bounds.h / TILE_SIZE;
@@ -224,31 +308,16 @@ void render(uint32_t time) {
     screen.rectangle(Rect(px, py, 1, TILE_SIZE));                 // left
     screen.rectangle(Rect(px + TILE_SIZE - 1, py, 1, TILE_SIZE)); // right
 
-    // cursor position in map tiles, so you can see the camera scroll
-    std::string pos = std::to_string(cursor.x) + "," + std::to_string(cursor.y);
-    Size size = screen.measure_text(pos, minimal_font);
-    screen.pen = Pen(0, 0, 0);
-    screen.rectangle(Rect(0, 0, size.w + 2, size.h + 2));
-    screen.pen = Pen(255, 255, 255);
-    screen.text(pos, minimal_font, Point(1, 1));
-
-    // population in the top-right corner
-    std::string pop = "POP " + std::to_string(population);
-    size = screen.measure_text(pop, minimal_font);
-    int tx = screen.bounds.w - size.w - 2;
-    screen.pen = Pen(0, 0, 0);
-    screen.rectangle(Rect(tx, 0, size.w + 2, size.h + 2));
-    screen.pen = Pen(255, 255, 255);
-    screen.text(pop, minimal_font, Point(tx + 1, 1));
-
-    // active tool in the bottom-left corner
-    std::string_view name = tool_names[tool];
-    size = screen.measure_text(name, minimal_font);
-    int ty = screen.bounds.h - size.h - 2;
-    screen.pen = Pen(0, 0, 0);
-    screen.rectangle(Rect(0, ty, size.w + 2, size.h + 2));
-    screen.pen = Pen(255, 255, 255);
-    screen.text(name, minimal_font, Point(1, ty + 1));
+    // HUD: money top-left (red for a moment after a failed build),
+    // population top-right, tool and cost bottom-left, date bottom-right
+    bool flash = was_broke && time - broke_time < 1000;
+    label("$" + std::to_string(money), Point(0, 0), TextAlign::top_left,
+          flash ? Pen(255, 60, 60) : Pen(255, 255, 255));
+    label("POP " + std::to_string(population), Point(screen.bounds.w, 0), TextAlign::top_right);
+    label(std::string(tool_names[tool]) + " $" + std::to_string(tool_costs[tool]),
+          Point(0, screen.bounds.h), TextAlign::bottom_left);
+    label(std::string(month_names[month % 12]) + " " + std::to_string(1900 + month / 12),
+          Point(screen.bounds.w, screen.bounds.h), TextAlign::bottom_right);
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -287,6 +356,14 @@ void update(uint32_t time) {
         simulate();
     }
 
+    // Y: stats screen on and off
+    if(buttons.pressed & Button::Y) {
+        show_stats = !show_stats;
+    }
+    if(show_stats) {
+        return; // the city keeps running, but the map controls are off
+    }
+
     // B: next tool, wrapping back to the first one
     if(buttons.pressed & Button::B) {
         tool = Tool((tool + 1) % TOOL_COUNT);
@@ -295,6 +372,13 @@ void update(uint32_t time) {
     // A: use the tool on the tile under the cursor
     if(buttons.pressed & Button::A) {
         uint8_t &tile = map[cursor.y][cursor.x];
+        uint8_t before = tile;
+        int cost = tool_costs[tool];
+        if(money < cost) {
+            was_broke = true;
+            broke_time = time;
+            return;
+        }
         switch(tool) {
             // building only works on empty grass; bulldoze first to replace
             case TOOL_ROAD:
@@ -315,6 +399,10 @@ void update(uint32_t time) {
                 break;
             default:
                 break;
+        }
+        // only pay when something actually changed
+        if(tile != before) {
+            money -= cost;
         }
     }
 }
