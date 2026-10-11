@@ -15,7 +15,9 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
   - A **power plant** (2×2, placed with the cursor at its top-left corner) powers everything connected to it by **power lines** or by other zones: a zone passes power to the zone next to it. Roads do not carry power.
   - **Residential** grows when there are jobs (the first few homes fill up anyway).
   - **Commercial** grows when there are enough residents to shop.
-  - **Industrial** grows when there are enough residents to work.
+  - **Industrial** grows when there are enough residents to work, and pollutes the tiles around it: the bigger the factory, the further the smog reaches. Homes in smog stop growing, and in heavy smog they shrink.
+  - **Parks** raise land value around them. Homes on high land value grow faster.
+  - Press **X** to look at the pollution or land value overlay.
 - You start with **$5000**. Building costs money:
 
   | Tool | Cost |
@@ -24,6 +26,7 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
   | Residential / Commercial / Industrial zone | $50 |
   | Power line | $5 |
   | Power plant | $1500 |
+  | Park | $20 |
   | Bulldoze | $5 |
 
 - Every month you collect taxes from residents and businesses and pay $1 upkeep per road tile.
@@ -39,6 +42,7 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
 | Use tool | A | Z |
 | Next tool | B | X |
 | Stats screen | Y | V |
+| Overlay: pollution, land value, off | X | C |
 | Pause menu (speed, save and quit) | MENU | Esc |
 
 ## Building
@@ -88,6 +92,7 @@ All graphics are 8×8 sprites in `assets/tiles.png` (8 sprites per row):
 | 56–71 | power line, picked by which neighbours carry power (same bits as roads) |
 | 72–75 | power plant: top-left, top-right, bottom-left, bottom-right quarter |
 | 76 | "no power" bolt, drawn over unpowered zones (transparent background) |
+| 77 | park |
 
 Redraw them in any pixel editor; keep the layout and the game picks them up.
 
