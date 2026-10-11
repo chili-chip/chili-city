@@ -39,8 +39,9 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
 
 | Action | VGC Zero | PC (SDL build) |
 |---|---|---|
-| Move cursor | D-pad | Arrow keys or WASD |
+| Move cursor (hold to keep moving) | D-pad | Arrow keys or WASD |
 | Use tool | A | Z |
+| Paint with tool (roads, zones, lines...) | hold A and move | hold Z and move |
 | Next tool | B | X |
 | Stats screen | Y | V |
 | Overlay: pollution, land value, off | X | C |

@@ -170,6 +170,12 @@ Point cursor(0, 0);
 // Map tile shown in the top-left corner of the screen.
 Point camera(0, 0);
 
+// Holding a direction moves the cursor again after REPEAT_DELAY_MS, then
+// every REPEAT_RATE_MS, like a keyboard key held down.
+constexpr uint32_t REPEAT_DELAY_MS = 300;
+constexpr uint32_t REPEAT_RATE_MS = 80;
+uint32_t next_repeat_time = 0;
+
 // true if one of the four tiles next to (x, y) is a road
 bool next_to_road(int x, int y) {
     if(x > 0         && map[y][x - 1] == TILE_ROAD) return true;
@@ -780,6 +786,76 @@ void update_pause() {
     }
 }
 
+// Uses the current tool on the tile under the cursor and pays for it.
+void use_tool(uint32_t time) {
+    uint8_t &tile = map[cursor.y][cursor.x];
+    uint8_t before = tile;
+    int cost = tool_costs[tool];
+    if(money < cost) {
+        was_broke = true;
+        broke_time = time;
+        play(SOUND_BROKE);
+        return;
+    }
+    switch(tool) {
+        // building only works on empty grass; bulldoze first to replace
+        case TOOL_ROAD:
+            if(tile == TILE_GRASS) tile = TILE_ROAD;
+            break;
+        case TOOL_RESIDENTIAL:
+            if(tile == TILE_GRASS) tile = TILE_RESIDENTIAL;
+            break;
+        case TOOL_COMMERCIAL:
+            if(tile == TILE_GRASS) tile = TILE_COMMERCIAL;
+            break;
+        case TOOL_INDUSTRIAL:
+            if(tile == TILE_GRASS) tile = TILE_INDUSTRIAL;
+            break;
+        case TOOL_POWER_LINE:
+            if(tile == TILE_GRASS) tile = TILE_POWER_LINE;
+            break;
+        case TOOL_PARK:
+            if(tile == TILE_GRASS) tile = TILE_PARK;
+            break;
+        case TOOL_POWER_PLANT:
+            // the cursor is the top-left of a 2x2 plant; all four tiles must be grass
+            if(cursor.x < MAP_W - 1 && cursor.y < MAP_H - 1
+               && map[cursor.y][cursor.x] == TILE_GRASS && map[cursor.y][cursor.x + 1] == TILE_GRASS
+               && map[cursor.y + 1][cursor.x] == TILE_GRASS && map[cursor.y + 1][cursor.x + 1] == TILE_GRASS) {
+                for(int part = 0; part < 4; part++) {
+                    map[cursor.y + part / 2][cursor.x + part % 2] = TILE_POWER_PLANT;
+                    level[cursor.y + part / 2][cursor.x + part % 2] = part;
+                }
+            }
+            break;
+        case TOOL_BULLDOZER:
+            if(tile == TILE_POWER_PLANT) {
+                // remove the whole plant: find its top-left from the quarter number
+                int part = level[cursor.y][cursor.x];
+                int left = cursor.x - part % 2;
+                int top = cursor.y - part / 2;
+                for(int p = 0; p < 4; p++) {
+                    map[top + p / 2][left + p % 2] = TILE_GRASS;
+                    level[top + p / 2][left + p % 2] = 0;
+                }
+            }
+            tile = TILE_GRASS;
+            level[cursor.y][cursor.x] = 0;
+            break;
+        default:
+            break;
+    }
+    // only pay when something actually changed
+    if(tile != before) {
+        money -= cost;
+        play(tool == TOOL_BULLDOZER ? SOUND_BULLDOZE : SOUND_BUILD);
+
+        // so the no-power bolts and overlays update right away
+        update_power();
+        update_land();
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 //
 // update(time)
@@ -809,11 +885,22 @@ void update(uint32_t time) {
     }
 
     // buttons.pressed only has the buttons that went down since the last
-    // update, so holding a direction moves the cursor once, not every frame
-    if(buttons.pressed & Button::DPAD_LEFT)  cursor.x--;
-    if(buttons.pressed & Button::DPAD_RIGHT) cursor.x++;
-    if(buttons.pressed & Button::DPAD_UP)    cursor.y--;
-    if(buttons.pressed & Button::DPAD_DOWN)  cursor.y++;
+    // update; buttons.state has every button held right now. A press moves
+    // once, and a held direction repeats after a short delay.
+    const uint32_t dpad = Button::DPAD_LEFT | Button::DPAD_RIGHT | Button::DPAD_UP | Button::DPAD_DOWN;
+    uint32_t move = buttons.pressed & dpad;
+    if(move) {
+        next_repeat_time = time + REPEAT_DELAY_MS;
+    } else if((buttons.state & dpad) && time >= next_repeat_time) {
+        move = buttons.state & dpad;
+        next_repeat_time = time + REPEAT_RATE_MS;
+    }
+
+    Point old_cursor = cursor;
+    if(move & Button::DPAD_LEFT)  cursor.x--;
+    if(move & Button::DPAD_RIGHT) cursor.x++;
+    if(move & Button::DPAD_UP)    cursor.y--;
+    if(move & Button::DPAD_DOWN)  cursor.y++;
 
     // keep the cursor on the map
     if(cursor.x < 0) cursor.x = 0;
@@ -865,73 +952,13 @@ void update(uint32_t time) {
         tool = Tool((tool + 1) % TOOL_COUNT);
     }
 
-    // A: use the tool on the tile under the cursor
+    // A: use the tool on the tile under the cursor. Holding A while moving
+    // paints with the tool, one tile per step. Not for power plants: one
+    // $1500 plant per step is never what you meant.
+    bool moved = cursor != old_cursor;
     if(buttons.pressed & Button::A) {
-        uint8_t &tile = map[cursor.y][cursor.x];
-        uint8_t before = tile;
-        int cost = tool_costs[tool];
-        if(money < cost) {
-            was_broke = true;
-            broke_time = time;
-            play(SOUND_BROKE);
-            return;
-        }
-        switch(tool) {
-            // building only works on empty grass; bulldoze first to replace
-            case TOOL_ROAD:
-                if(tile == TILE_GRASS) tile = TILE_ROAD;
-                break;
-            case TOOL_RESIDENTIAL:
-                if(tile == TILE_GRASS) tile = TILE_RESIDENTIAL;
-                break;
-            case TOOL_COMMERCIAL:
-                if(tile == TILE_GRASS) tile = TILE_COMMERCIAL;
-                break;
-            case TOOL_INDUSTRIAL:
-                if(tile == TILE_GRASS) tile = TILE_INDUSTRIAL;
-                break;
-            case TOOL_POWER_LINE:
-                if(tile == TILE_GRASS) tile = TILE_POWER_LINE;
-                break;
-            case TOOL_PARK:
-                if(tile == TILE_GRASS) tile = TILE_PARK;
-                break;
-            case TOOL_POWER_PLANT:
-                // the cursor is the top-left of a 2x2 plant; all four tiles must be grass
-                if(cursor.x < MAP_W - 1 && cursor.y < MAP_H - 1
-                   && map[cursor.y][cursor.x] == TILE_GRASS && map[cursor.y][cursor.x + 1] == TILE_GRASS
-                   && map[cursor.y + 1][cursor.x] == TILE_GRASS && map[cursor.y + 1][cursor.x + 1] == TILE_GRASS) {
-                    for(int part = 0; part < 4; part++) {
-                        map[cursor.y + part / 2][cursor.x + part % 2] = TILE_POWER_PLANT;
-                        level[cursor.y + part / 2][cursor.x + part % 2] = part;
-                    }
-                }
-                break;
-            case TOOL_BULLDOZER:
-                if(tile == TILE_POWER_PLANT) {
-                    // remove the whole plant: find its top-left from the quarter number
-                    int part = level[cursor.y][cursor.x];
-                    int left = cursor.x - part % 2;
-                    int top = cursor.y - part / 2;
-                    for(int p = 0; p < 4; p++) {
-                        map[top + p / 2][left + p % 2] = TILE_GRASS;
-                        level[top + p / 2][left + p % 2] = 0;
-                    }
-                }
-                tile = TILE_GRASS;
-                level[cursor.y][cursor.x] = 0;
-                break;
-            default:
-                break;
-        }
-        // only pay when something actually changed
-        if(tile != before) {
-            money -= cost;
-            play(tool == TOOL_BULLDOZER ? SOUND_BULLDOZE : SOUND_BUILD);
-
-            // so the no-power bolts and overlays update right away
-            update_power();
-            update_land();
-        }
+        use_tool(time);
+    } else if((buttons.state & Button::A) && moved && tool != TOOL_POWER_PLANT) {
+        use_tool(time);
     }
 }
