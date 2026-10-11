@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Pico 2 (out/build/vgc)",
+      "type": "shell",
+      "command": "cmake --build out/build/vgc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Flash Pico 2 (SWD)",
+      "type": "shell",
+      "command": "openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg -c \"adapter speed 5000; program \\\"game.elf\\\" verify reset exit\"",
+      "options": {
+        "cwd": "${workspaceFolder}/out/build/vgc"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build + Flash Pico 2",
+      "dependsOn": [
+        "Build Pico 2 (out/build/vgc)",
+        "Flash Pico 2 (SWD)"
+      ],
+      "dependsOrder": "sequence"
+    },
+  ]
+}

@@ -1,0 +1,33 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "vgc",
+            "displayName": "vgc",
+            "description": "Using compilers: C = /usr/bin/arm-none-eabi-gcc, CXX = /usr/bin/arm-none-eabi-g++",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "32BLIT_DIR": "${sourceDir}/../32blit-sdk",
+                "PICO_SDK_PATH": "${sourceDir}/../pico-sdk",
+                "PICO_BOARD": "chilichip_vgc",
+                "PICO_PLATFORM": "rp2350-arm-s",
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../32blit-sdk/pico2.toolchain",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_ASM_COMPILER": "/usr/bin/arm-none-eabi-gcc"
+            }
+        },
+        {
+            "name": "linux",
+            "displayName": "linux",
+            "description": "Using compilers: C = /usr/bin/gcc, CXX = /usr/bin/g++",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        }
+    ]
+}

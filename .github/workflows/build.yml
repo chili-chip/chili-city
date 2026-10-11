@@ -1,0 +1,203 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - '**'
+  release:
+    types: [published]
+    
+permissions:
+  contents: write
+
+env:
+  BUILD_TYPE: Release
+  EM_VERSION: 2.0.18
+  EM_CACHE_FOLDER: 'emsdk-cache'
+
+jobs:
+
+  build:
+
+    name: ${{matrix.name}}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: Linux
+            release-suffix: LIN64
+            cmake-args: -D32BLIT_DIR=$GITHUB_WORKSPACE/32blit-sdk
+            apt-packages: libsdl2-dev libsdl2-image-dev libsdl2-net-dev python3-setuptools
+
+          - os: ubuntu-22.04
+            name: STM32
+            release-suffix: STM32
+            cmake-args: -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/32blit-sdk/32blit.toolchain
+            apt-packages: gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib python3-setuptools
+
+          - os: ubuntu-22.04
+            name: Emscripten
+            release-suffix: WEB
+            cmake-args: -D32BLIT_DIR=$GITHUB_WORKSPACE/32blit-sdk
+            cmake-prefix: emcmake
+            apt-packages: python3-setuptools
+
+          - os: ubuntu-22.04
+            name: VGC
+            release-suffix: VGC
+            cmake-args: -D32BLIT_DIR=$GITHUB_WORKSPACE/32blit-sdk -DPICO_SDK_PATH=$GITHUB_WORKSPACE/pico-sdk -DPICO_BOARD=chilichip_vgc -DPICO_PLATFORM=rp2350-arm-s -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/32blit-sdk/pico2.toolchain
+            apt-packages: gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib python3-setuptools
+
+          - os: macos-latest
+            name: macOS
+            release-suffix: MACOS
+            cmake-args: -D32BLIT_DIR=$GITHUB_WORKSPACE/32blit-sdk
+            brew-packages: sdl2 sdl2_image sdl2_net pipx
+
+          - os: windows-latest
+            name: Visual Studio
+            release-suffix: WIN64
+            cmake-args: -D32BLIT_DIR=$GITHUB_WORKSPACE/32blit-sdk -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+    runs-on: ${{matrix.os}}
+
+    env:
+      RELEASE_FILE: ${{github.event.repository.name}}-${{github.event.release.tag_name}}-${{matrix.release-suffix}}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: main
+
+      - name: Checkout 32Blit API
+        uses: actions/checkout@v4
+        with:
+          repository: chili-chip/32blit-sdk
+          path: 32blit-sdk
+
+      - name: Checkout Pico SDK
+        if: matrix.name == 'VGC'
+        uses: actions/checkout@v4
+        with:
+          repository: chili-chip/pico-sdk
+          path: pico-sdk
+          submodules: true
+
+      - name: Checkout Pico Extras
+        if: matrix.name == 'VGC'
+        uses: actions/checkout@v4
+        with:
+          repository: chili-chip/pico-extras
+          path: pico-extras
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update && sudo apt install ${{matrix.apt-packages}}
+          pip3 install 32blit
+
+      - name: Install macOS deps
+        if: runner.os == 'macOS'
+        run: |
+          brew install ${{matrix.brew-packages}}
+          pipx install 32blit
+
+      - name: Install Windows deps
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python -m pip install 32blit
+
+      - name: Setup Emscripten cache
+        if: matrix.name == 'Emscripten'
+        id: cache-system-libraries
+        uses: actions/cache@v3
+        with:
+          path: ${{env.EM_CACHE_FOLDER}}
+          key: ${{env.EM_VERSION}}-${{runner.os}}
+
+      - name: Setup Emscripten
+        if: matrix.name == 'Emscripten'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{env.EM_VERSION}}
+          actions-cache-folder: ${{env.EM_CACHE_FOLDER}}
+
+      - name: Pre-build Emscripten ports
+        if: matrix.name == 'Emscripten'
+        run: embuilder.py build sdl2 sdl2-image-jpg sdl2-net
+
+      - name: Create Build Environment
+        run: cmake -E make_directory ${{runner.workspace}}/main/build
+
+      - name: Configure CMake
+        shell: bash
+        working-directory: ${{runner.workspace}}/main/build
+        run: ${{matrix.cmake-prefix}} cmake $GITHUB_WORKSPACE/main -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCPACK_PACKAGE_FILE_NAME=${{env.RELEASE_FILE}} ${{matrix.cmake-args}}
+
+      - name: Build
+        working-directory: ${{runner.workspace}}/main/build
+        shell: bash
+        run: |
+          cmake --build . --config $BUILD_TYPE -j 2
+
+      - name: Package Release
+        if: github.event_name == 'release' && matrix.release-suffix != ''
+        shell: bash
+        working-directory: ${{runner.workspace}}/main/build
+        run: |
+          cmake --build . --config $BUILD_TYPE --target package
+
+      - name: Upload tar
+        if: github.event_name == 'release' && matrix.release-suffix != ''
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{runner.workspace}}/main/build/${{env.RELEASE_FILE}}.tar.gz
+
+      - name: Upload zip
+        if: github.event_name == 'release' && matrix.release-suffix != ''
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{runner.workspace}}/main/build/${{env.RELEASE_FILE}}.zip
+
+      - name: Rename HTML to index.html
+        if: matrix.name == 'Emscripten' && github.ref == 'refs/heads/main'
+        run: |
+          cd ${{runner.workspace}}/main/build
+          original_html=$(ls *.html | head -n 1)
+          mv "$original_html" index.html
+
+      - name: Upload Emscripten build artifact
+        if: matrix.name == 'Emscripten' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: emscripten-build
+          path: ${{runner.workspace}}/main/build
+
+  deploy-pages:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Download Emscripten build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: emscripten-build
+          path: web-build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-build
+
+      - name: Deploy GitHub Pages
+        uses: actions/deploy-pages@v4
