@@ -14,7 +14,22 @@ constexpr int MAP_H = 32;
 // What is on each map tile. One byte per tile.
 enum Tile : uint8_t {
     TILE_GRASS = 0,
+    TILE_ROAD,
 };
+
+// What pressing A does. B switches to the next tool.
+enum Tool {
+    TOOL_ROAD = 0,
+    TOOL_BULLDOZER,
+    TOOL_COUNT, // number of tools, keep last
+};
+
+const char *tool_names[TOOL_COUNT] = {
+    "ROAD",
+    "BULLDOZE",
+};
+
+Tool tool = TOOL_ROAD;
 
 // The city. map[y][x], so a row is one line of tiles.
 uint8_t map[MAP_H][MAP_W];
@@ -62,6 +77,9 @@ void render(uint32_t time) {
             int my = camera.y + sy;
 
             switch(map[my][mx]) {
+                case TILE_ROAD:
+                    screen.pen = Pen(110, 110, 110);
+                    break;
                 case TILE_GRASS:
                 default:
                     screen.pen = Pen(30, 120, 30);
@@ -96,6 +114,15 @@ void render(uint32_t time) {
     screen.rectangle(Rect(0, 0, size.w + 2, size.h + 2));
     screen.pen = Pen(255, 255, 255);
     screen.text(pos, minimal_font, Point(1, 1));
+
+    // active tool in the bottom-left corner
+    std::string_view name = tool_names[tool];
+    size = screen.measure_text(name, minimal_font);
+    int ty = screen.bounds.h - size.h - 2;
+    screen.pen = Pen(0, 0, 0);
+    screen.rectangle(Rect(0, ty, size.w + 2, size.h + 2));
+    screen.pen = Pen(255, 255, 255);
+    screen.text(name, minimal_font, Point(1, ty + 1));
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -126,4 +153,24 @@ void update(uint32_t time) {
     if(cursor.y < camera.y) camera.y = cursor.y;
     if(cursor.x > camera.x + view_w - 1) camera.x = cursor.x - view_w + 1;
     if(cursor.y > camera.y + view_h - 1) camera.y = cursor.y - view_h + 1;
+
+    // B: next tool, wrapping back to the first one
+    if(buttons.pressed & Button::B) {
+        tool = Tool((tool + 1) % TOOL_COUNT);
+    }
+
+    // A: use the tool on the tile under the cursor
+    if(buttons.pressed & Button::A) {
+        uint8_t &tile = map[cursor.y][cursor.x];
+        switch(tool) {
+            case TOOL_ROAD:
+                tile = TILE_ROAD;
+                break;
+            case TOOL_BULLDOZER:
+                tile = TILE_GRASS;
+                break;
+            default:
+                break;
+        }
+    }
 }
