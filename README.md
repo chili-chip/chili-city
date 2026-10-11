@@ -24,8 +24,9 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
   | Bulldoze | $5 |
 
 - Every month you collect taxes from residents and businesses and pay $1 upkeep per road tile.
+- The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast) or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
-- The city autosaves every January (a game year is 24 seconds) and loads when the game starts. To start over, delete the save: the `save0` file under `.blit/` on the console's storage, or `~/.local/share/pablolambo/Chili City/save0` on Linux.
+- The city autosaves every January (a game year is 24 seconds at normal speed) and is offered as **CONTINUE** on the title screen.
 
 ## Controls
 
@@ -35,6 +36,7 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
 | Use tool | A | Z |
 | Next tool | B | X |
 | Stats screen | Y | V |
+| Pause menu (speed, save and quit) | MENU | Esc |
 
 ## Building
 
