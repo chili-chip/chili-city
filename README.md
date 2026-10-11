@@ -1,68 +1,87 @@
-# Game template
+# Chili City
 
-![Build](https://github.com/chili-chip/32blit-boilerplate/workflows/Build/badge.svg)
+![Build](https://github.com/chili-chip/chili-city/actions/workflows/build.yml/badge.svg)
 
-This is a basic template for starting game projects for VGC Zero, using 32blit sdk. It shows the basic
-code layout and asset pipeline, hopefully giving folk a starting point for
-any new projects.
+![Chili City splash](assets/splash.png)
 
-It's based on the original `template` project from the 
-[32blit-boilerplate](https://github.com/32blit/32blit-boilerplate), with added support for chilichip's vgc zero.
+A tiny SimCity-like city builder for the [VGC Zero](https://chilichip.eu) handheld, written in C++ with the chili-chip fork of the [32blit SDK](https://github.com/chili-chip/32blit-sdk).
 
-## Usage
+Lay roads, zone land for homes, shops and factories, and watch the city grow month by month while you keep the budget out of the red.
 
-[Use this template](https://github.com/chili-chip/32blit-boilerplate/generate) to
-generate your own project.
+## How to play
 
-* Edit the CMakeList.txt file to set the name of your project
-* Edit the metadata.yml file to set the information for your project
-* Edit the LICENSE file to set your name on the license
-* Write lots of super cool code!
+- The map is 32×32 tiles; the screen shows 16×16 and scrolls with the cursor.
+- Zones only grow when they touch a road.
+  - **Residential** grows when there are jobs (the first few homes fill up anyway).
+  - **Commercial** grows when there are enough residents to shop.
+  - **Industrial** grows when there are enough residents to work.
+- You start with **$5000**. Building costs money:
 
-You should then be able to follow the usual build instructions.
+  | Tool | Cost |
+  |---|---|
+  | Road | $10 |
+  | Residential / Commercial / Industrial zone | $50 |
+  | Bulldoze | $5 |
 
-For local builds this is:
+- Every month you collect taxes from residents and businesses and pay $1 upkeep per road tile.
+- You can only build on grass. Bulldoze first to replace something.
+
+## Controls
+
+| Action | VGC Zero | PC (SDL build) |
+|---|---|---|
+| Move cursor | D-pad | Arrow keys or WASD |
+| Use tool | A | Z |
+| Next tool | B | X |
+| Stats screen | Y | V |
+
+## Building
+
+Clone this repo next to the [32blit-sdk](https://github.com/chili-chip/32blit-sdk) (and, for the console, [pico-sdk](https://github.com/chili-chip/pico-sdk) and [pico-extras](https://github.com/chili-chip/pico-extras)):
+
 ```
-mkdir build
-cd build
-cmake -D32BLIT_DIR=/path/to/32blit-sdk/ ..
+chilichip/
+├── 32blit-sdk/
+├── pico-sdk/
+├── pico-extras/
+└── chili-city/
 ```
 
-For vgc zero builds this is:
+`CMakePresets.json` needs CMake 3.28 or newer. Setup steps for the tools are in the [Linux quickstart](https://chilichip.eu/docs/game-sdk/quickstart/linux-quickstart/).
+
+**PC (Linux SDL):**
+
 ```
-mkdir build.vgc
-cd build.vgc
-cmake .. \
-  -D32BLIT_DIR=../../32blit-sdk \
-  -DPICO_SDK_PATH=../../pico-sdk \
-  -DPICO_BOARD=chilichip_vgc \
-  -DPICO_PLATFORM=rp2350-arm-s \
-  -DCMAKE_TOOLCHAIN_FILE=../../32blit-sdk/pico2.toolchain
+cmake --preset linux
+cmake --build out/build/linux
+./out/build/linux/chili-city.elf
 ```
-[detailed instructions for vgc](https://github.com/chili-chip/32blit-sdk/blob/master/docs/vgc.md)
 
-Platform/Editor specific insctuctions [can be found in the fork of the main 32blit repo](https://github.com/chili-chip/32blit-sdk/blob/master/docs/vgc.md)
-(For Visual Studio, you should follow the "Option 2" instructions, as the boilerplate does not contain a solution file)
+**VGC Zero:**
 
-## VS Code Setup (Optional but Recommended)
-
-For the best development experience with VS Code, install these extensions:
-- **CMake Tools** - For building and configuring the project with CMake
-- **Cortex-Debug** - For debugging on the Pico 2 with OpenOCD
-
-These extensions enable integrated building, flashing, and debugging directly from VS Code.
-
-## Flashing to Pico via SWD
-
-Make sure you have:
-- raspberrypi's [openocd fork ](https://github.com/raspberrypi/openocd) installed (rp2350 support not yet in openocd) 
-- Pico Debugger or Picoprobe connected via SWD pins (SWDIO, SWCLK, GND)
-- The game has been built successfully (produces `game.elf`)
-
-
-To flash the built executable to your Raspberry Pi Pico using the Pico Debugger over SWD:
-
-```bash
-cd build
-openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg -c "adapter speed 5000; program "game.elf" verify reset exit"
 ```
+cmake --preset vgc
+cmake --build out/build/vgc
+```
+
+Then hold **BOOT** while plugging the console in, and copy `out/build/vgc/chili-city.uf2` to the `RP2350` drive. The console reboots into the game.
+
+Ready-made `.uf2` files are attached to each [release](https://github.com/chili-chip/chili-city/releases).
+
+## Art
+
+All graphics are 8×8 sprites in `assets/tiles.png` (8 sprites per row):
+
+| Sprites | Contents |
+|---|---|
+| 0 | grass |
+| 16–31 | road, picked by which neighbours are roads (north 1, east 2, south 4, west 8) |
+| 32–35 | residential, levels 0–3 |
+| 40–43 | commercial, levels 0–3 |
+| 48–51 | industrial, levels 0–3 |
+
+Redraw them in any pixel editor; keep the layout and the game picks them up.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Based on the [32blit boilerplate](https://github.com/32blit/32blit-boilerplate).
