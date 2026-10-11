@@ -95,19 +95,20 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt update && sudo apt install ${{matrix.apt-packages}}
-          pip3 install 32blit
+          pip3 install 32blit "bitstring<5"
 
       - name: Install macOS deps
         if: runner.os == 'macOS'
         run: |
           brew install ${{matrix.brew-packages}}
           pipx install 32blit
+          pipx inject --force 32blit "bitstring<5"
 
       - name: Install Windows deps
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          python -m pip install 32blit
+          python -m pip install 32blit "bitstring<5"
 
       - name: Setup Emscripten cache
         if: matrix.name == 'Emscripten'
