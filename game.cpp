@@ -1,6 +1,7 @@
 #include <string>
 
 #include "game.hpp"
+#include "assets.hpp"
 
 using namespace blit;
 
@@ -19,6 +20,14 @@ enum Tile : uint8_t {
     TILE_COMMERCIAL,
     TILE_INDUSTRIAL,
 };
+
+// Where each tile's picture is in assets/tiles.png. The sheet is 8 sprites
+// wide, so sprite n is at column n % 8, row n / 8.
+constexpr int SPRITE_GRASS = 0;
+constexpr int SPRITE_ROAD = 16;        // + which neighbours are roads (0..15)
+constexpr int SPRITE_RESIDENTIAL = 32; // + level (0..3)
+constexpr int SPRITE_COMMERCIAL = 40;  // + level
+constexpr int SPRITE_INDUSTRIAL = 48;  // + level
 
 // What pressing A does. B switches to the next tool.
 enum Tool {
@@ -98,6 +107,17 @@ bool next_to_road(int x, int y) {
     if(y > 0         && map[y - 1][x] == TILE_ROAD) return true;
     if(y < MAP_H - 1 && map[y + 1][x] == TILE_ROAD) return true;
     return false;
+}
+
+// Which of the four neighbours are roads, as bits: north 1, east 2,
+// south 4, west 8. Picks the road sprite that connects the right way.
+int road_mask(int x, int y) {
+    int mask = 0;
+    if(y > 0         && map[y - 1][x] == TILE_ROAD) mask |= 1;
+    if(x < MAP_W - 1 && map[y][x + 1] == TILE_ROAD) mask |= 2;
+    if(y < MAP_H - 1 && map[y + 1][x] == TILE_ROAD) mask |= 4;
+    if(x > 0         && map[y][x - 1] == TILE_ROAD) mask |= 8;
+    return mask;
 }
 
 // One month of city life: zones next to roads grow when there is demand,
@@ -225,6 +245,9 @@ void render_stats() {
 void init() {
     set_screen_mode(ScreenMode::hires);
 
+    // the tile pictures; screen.sprite(n, ...) draws sprite n from this sheet
+    screen.sprites = Surface::load(asset_tiles);
+
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
             map[y][x] = TILE_GRASS;
@@ -258,45 +281,17 @@ void render(uint32_t time) {
             int mx = camera.x + sx;
             int my = camera.y + sy;
 
+            int sprite;
             switch(map[my][mx]) {
-                case TILE_ROAD:
-                    screen.pen = Pen(110, 110, 110);
-                    break;
-                case TILE_RESIDENTIAL:
-                    screen.pen = Pen(120, 220, 120);
-                    break;
-                case TILE_COMMERCIAL:
-                    screen.pen = Pen(80, 140, 230);
-                    break;
-                case TILE_INDUSTRIAL:
-                    screen.pen = Pen(230, 200, 60);
-                    break;
+                case TILE_ROAD:        sprite = SPRITE_ROAD + road_mask(mx, my); break;
+                case TILE_RESIDENTIAL: sprite = SPRITE_RESIDENTIAL + level[my][mx]; break;
+                case TILE_COMMERCIAL:  sprite = SPRITE_COMMERCIAL + level[my][mx]; break;
+                case TILE_INDUSTRIAL:  sprite = SPRITE_INDUSTRIAL + level[my][mx]; break;
                 case TILE_GRASS:
-                default:
-                    screen.pen = Pen(30, 120, 30);
-                    break;
+                default:               sprite = SPRITE_GRASS; break;
             }
-            screen.rectangle(Rect(sx * TILE_SIZE, sy * TILE_SIZE, TILE_SIZE, TILE_SIZE));
-
-            // buildings: a darker square that gets bigger with the level
-            int lv = level[my][mx];
-            if(lv > 0) {
-                Pen zone = screen.pen;
-                screen.pen = Pen(zone.r / 2, zone.g / 2, zone.b / 2);
-                int size = lv * 2;
-                int offset = 1 + (TILE_SIZE - 1 - size) / 2;
-                screen.rectangle(Rect(sx * TILE_SIZE + offset, sy * TILE_SIZE + offset, size, size));
-            }
+            screen.sprite(sprite, Point(sx * TILE_SIZE, sy * TILE_SIZE));
         }
-    }
-
-    // grid lines, one pixel wide, every TILE_SIZE pixels
-    screen.pen = Pen(20, 90, 20);
-    for(int x = 0; x < screen.bounds.w; x += TILE_SIZE) {
-        screen.rectangle(Rect(x, 0, 1, screen.bounds.h));
-    }
-    for(int y = 0; y < screen.bounds.h; y += TILE_SIZE) {
-        screen.rectangle(Rect(0, y, screen.bounds.w, 1));
     }
 
     // cursor: white frame around the selected tile, in screen pixels
