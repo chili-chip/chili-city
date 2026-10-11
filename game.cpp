@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -138,10 +139,31 @@ const char *month_names[12] = {
 int population = 0;
 int res_levels = 0, com_levels = 0, ind_levels = 0;
 int road_count = 0;
+int plant_count = 0; // power plants, not tiles: each plant is 4 tiles
 
 // Money. Building costs money, taxes bring it in once a month.
 int money = 5000;
-int last_income = 0;    // taxes minus road upkeep last month
+int last_income = 0;    // taxes minus upkeep last month
+
+// Tax rate in percent, set on the budget screen. Higher taxes bring in
+// more money but make the city less attractive: every 2% above the
+// default lowers the demand for all zones by one, every 2% below raises it.
+constexpr int DEFAULT_TAX_RATE = 7;
+constexpr int MAX_TAX_RATE = 20;
+int tax_rate = DEFAULT_TAX_RATE;
+
+// Monthly upkeep: every road tile and every power plant.
+constexpr int ROAD_UPKEEP = 1;
+constexpr int PLANT_UPKEEP = 50;
+
+// Money in and out, added up over a year for the budget screen.
+struct Budget {
+    int taxes = 0;
+    int roads = 0;
+    int power = 0;
+};
+Budget this_year, last_year;
+bool have_last_year = false; // false until a year ends after a new game or load
 
 // When the player last tried to build without enough money, to flash the HUD.
 uint32_t broke_time = 0;
@@ -152,6 +174,7 @@ enum Screen {
     SCREEN_TITLE,
     SCREEN_CITY,
     SCREEN_PAUSE,
+    SCREEN_BUDGET,
 };
 Screen current_screen = SCREEN_TITLE;
 
@@ -289,7 +312,7 @@ void update_land() {
 
 // Recounts the city totals shown on the HUD and the stats screen.
 void count_city() {
-    res_levels = com_levels = ind_levels = road_count = 0;
+    res_levels = com_levels = ind_levels = road_count = plant_count = 0;
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
             switch(map[y][x]) {
@@ -297,6 +320,7 @@ void count_city() {
                 case TILE_COMMERCIAL:  com_levels += level[y][x]; break;
                 case TILE_INDUSTRIAL:  ind_levels += level[y][x]; break;
                 case TILE_ROAD:        road_count++; break;
+                case TILE_POWER_PLANT: if(level[y][x] == 0) plant_count++; break; // count top-left quarters
                 default: break;
             }
         }
@@ -311,7 +335,7 @@ void count_city() {
 // byte for byte, so magic and version let us spot a file from another
 // game or an older layout and ignore it.
 constexpr uint32_t SAVE_MAGIC = 0x59544943; // "CITY"
-constexpr uint8_t SAVE_VERSION = 1;
+constexpr uint8_t SAVE_VERSION = 2;
 
 struct SaveData {
     uint32_t magic;
@@ -320,7 +344,14 @@ struct SaveData {
     uint8_t level[MAP_H][MAP_W];
     int32_t money;
     int32_t month;
+    int32_t tax_rate; // new in version 2
 };
+
+// The version 1 layout, written by Chili City v2.0.0. Version 2 only
+// added fields at the end, so a version 1 file is the same bytes minus
+// those; it loads with the new fields at their defaults.
+constexpr uint8_t SAVE_VERSION_V2_0_0 = 1;
+constexpr size_t SAVE_SIZE_V2_0_0 = offsetof(SaveData, tax_rate);
 
 // When the city was last saved, to show "SAVED" on the HUD for a moment.
 uint32_t saved_time = 0;
@@ -335,19 +366,32 @@ void save_city() {
     memcpy(save.level, level, sizeof(level));
     save.money = money;
     save.month = month;
+    save.tax_rate = tax_rate;
     write_save(save);
 }
 
 // Returns false when there is no usable save, so the game starts fresh.
 bool load_city() {
     static SaveData save;
-    if(!read_save(save) || save.magic != SAVE_MAGIC || save.version != SAVE_VERSION) {
+    bool ok = read_save(save) && save.version == SAVE_VERSION;
+    if(!ok) {
+        // read_save() fails when the file is shorter than asked for, so try
+        // the shorter v2.0.0 size, with the newer fields at their defaults
+        save = SaveData{};
+        save.tax_rate = DEFAULT_TAX_RATE;
+        ok = read_save(reinterpret_cast<char *>(&save), SAVE_SIZE_V2_0_0)
+             && save.version == SAVE_VERSION_V2_0_0;
+    }
+    if(!ok || save.magic != SAVE_MAGIC) {
         return false;
     }
     memcpy(map, save.map, sizeof(map));
     memcpy(level, save.level, sizeof(level));
     money = save.money;
     month = save.month;
+    tax_rate = std::max(0, std::min(MAX_TAX_RATE, int(save.tax_rate)));
+    this_year = last_year = Budget();
+    have_last_year = false;
     count_city();
     return true;
 }
@@ -363,21 +407,29 @@ void new_city() {
     money = 5000;
     month = 0;
     last_income = 0;
+    tax_rate = DEFAULT_TAX_RATE;
+    this_year = last_year = Budget();
+    have_last_year = false;
     cursor = Point(0, 0);
     camera = Point(0, 0);
     count_city();
 }
 
+// How much the tax rate pushes demand up (low taxes) or down (high taxes).
+int tax_effect() {
+    return (DEFAULT_TAX_RATE - tax_rate) / 2;
+}
+
 // How much the city wants more of each zone, from its building levels.
 // Above 0 means that zone grows; the HUD meter shows the same numbers.
 int res_demand(int res, int com, int ind) {
-    return com + ind + 4 - res; // people move in when there are jobs; the first few come anyway
+    return com + ind + 4 - res + tax_effect(); // people move in when there are jobs; the first few come anyway
 }
 int com_demand(int res, int com) {
-    return res - com * 2;       // shops need customers
+    return res - com * 2 + tax_effect();       // shops need customers
 }
 int ind_demand(int res, int ind) {
-    return res - ind;           // factories need workers
+    return res - ind + tax_effect();           // factories need workers
 }
 
 // One month of city life: zones next to roads grow when there is demand,
@@ -396,8 +448,9 @@ void simulate() {
         }
     }
 
-    // taxes are collected on last month's city, before it grows
-    int taxes = res * PEOPLE_PER_LEVEL / 4 + (com + ind) * 5;
+    // taxes are collected on last month's city, before it grows: at the
+    // default 7% every building level pays $5 a month
+    int taxes = (res + com + ind) * 5 * tax_rate / DEFAULT_TAX_RATE;
 
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
@@ -442,9 +495,14 @@ void simulate() {
     // recount after growing, for the HUD and stats screen
     count_city();
 
-    // every road tile costs 1 a month to maintain
-    last_income = taxes - road_count;
+    int road_upkeep = road_count * ROAD_UPKEEP;
+    int power_upkeep = plant_count * PLANT_UPKEEP;
+    last_income = taxes - road_upkeep - power_upkeep;
     money += last_income;
+
+    this_year.taxes += taxes;
+    this_year.roads += road_upkeep;
+    this_year.power += power_upkeep;
 }
 
 // Sound effects. Each is one short note on a 32blit audio channel: the
@@ -587,12 +645,13 @@ void render_title() {
     }
 }
 
-const char *pause_items[] = {"RESUME", "SPEED", "SAVE + TITLE"};
-constexpr int PAUSE_ITEMS = 3;
+const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "SAVE + TITLE"};
+constexpr int PAUSE_ITEMS = 4;
+enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_SAVE};
 
 // The pause menu, drawn as a box over the frozen city.
 void render_pause() {
-    Rect box(14, 30, screen.bounds.w - 28, 64);
+    Rect box(14, 24, screen.bounds.w - 28, 76);
     screen.pen = Pen(0, 0, 0);
     screen.rectangle(box);
     screen.pen = Pen(255, 255, 255);
@@ -600,8 +659,44 @@ void render_pause() {
 
     // show the current speed in the SPEED line
     std::string speed_line = std::string("SPEED: ") + speed_names[speed];
-    const char *items[PAUSE_ITEMS] = {pause_items[0], speed_line.c_str(), pause_items[2]};
+    const char *items[PAUSE_ITEMS] = {pause_items[0], speed_line.c_str(), pause_items[2], pause_items[3]};
     render_menu(items, PAUSE_ITEMS, box.y + 20);
+}
+
+// Money with a sign, like +120 or -40.
+std::string signed_money(int value) {
+    return (value < 0 ? "-$" : "+$") + std::to_string(abs(value));
+}
+
+// The budget screen: the tax rate, and where the money came from and went.
+void render_budget() {
+    screen.pen = Pen(0, 0, 40);
+    screen.clear();
+    screen.pen = Pen(255, 255, 255);
+
+    // until a full year has been played, show this one so far
+    bool full_year = have_last_year;
+    const Budget &b = full_year ? last_year : this_year;
+
+    std::string lines[] = {
+        "BUDGET",
+        "",
+        "TAX RATE   < " + std::to_string(tax_rate) + "% >",
+        "",
+        full_year ? "LAST YEAR" : "THIS YEAR SO FAR",
+        "TAXES      " + signed_money(b.taxes),
+        "ROADS      -$" + std::to_string(b.roads),
+        "POWER      -$" + std::to_string(b.power),
+        "TOTAL      " + signed_money(b.taxes - b.roads - b.power),
+        "",
+        "LEFT/RIGHT: TAX RATE",
+        "A/B: BACK",
+    };
+    int y = 4;
+    for(auto &line : lines) {
+        screen.text(line, minimal_font, Point(4, y));
+        y += 9;
+    }
 }
 
 void render_city(uint32_t time);
@@ -643,6 +738,9 @@ void render(uint32_t time) {
         case SCREEN_PAUSE:
             render_city(time);
             render_pause();
+            break;
+        case SCREEN_BUDGET:
+            render_budget();
             break;
         case SCREEN_CITY:
             if(show_stats) {
@@ -766,7 +864,7 @@ void update_pause() {
         return;
     }
 
-    bool on_speed = menu_choice == 1;
+    bool on_speed = menu_choice == PAUSE_SPEED;
     if(on_speed && (buttons.pressed & (Button::A | Button::DPAD_RIGHT))) {
         speed = Speed((speed + 1) % SPEED_COUNT);
     }
@@ -775,9 +873,11 @@ void update_pause() {
     }
 
     if(buttons.pressed & Button::A) {
-        if(menu_choice == 0) {
+        if(menu_choice == PAUSE_RESUME) {
             current_screen = SCREEN_CITY;
-        } else if(menu_choice == 2) {
+        } else if(menu_choice == PAUSE_BUDGET) {
+            current_screen = SCREEN_BUDGET;
+        } else if(menu_choice == PAUSE_SAVE) {
             save_city();
             has_save = true;
             current_screen = SCREEN_TITLE;
@@ -856,6 +956,19 @@ void use_tool(uint32_t time) {
     }
 }
 
+// Left and right change the tax rate; A or B go back to the pause menu.
+void update_budget() {
+    if(buttons.pressed & Button::DPAD_LEFT)  tax_rate = std::max(0, tax_rate - 1);
+    if(buttons.pressed & Button::DPAD_RIGHT) tax_rate = std::min(MAX_TAX_RATE, tax_rate + 1);
+    if(buttons.pressed & (Button::DPAD_LEFT | Button::DPAD_RIGHT)) {
+        play(SOUND_MENU);
+    }
+    if(buttons.pressed & (Button::A | Button::B | Button::MENU)) {
+        current_screen = SCREEN_PAUSE;
+        play(SOUND_MENU);
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 //
 // update(time)
@@ -871,6 +984,10 @@ void update(uint32_t time) {
             return;
         case SCREEN_PAUSE:
             update_pause();
+            last_month_time = time;
+            return;
+        case SCREEN_BUDGET:
+            update_budget();
             last_month_time = time;
             return;
         case SCREEN_CITY:
@@ -923,6 +1040,12 @@ void update(uint32_t time) {
         last_month_time = time;
         month++;
         simulate();
+        // a new year: this year's budget becomes last year's
+        if(month % 12 == 0) {
+            last_year = this_year;
+            this_year = Budget();
+            have_last_year = true;
+        }
         play(SOUND_MONTH);
 
         // autosave once a year, every January. Not every month: on the

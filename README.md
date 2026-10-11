@@ -30,8 +30,9 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
   | Park | $20 |
   | Bulldoze | $5 |
 
-- Every month you collect taxes from residents and businesses and pay $1 upkeep per road tile.
-- The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast) or save and go back to the title.
+- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile and $50 per power plant.
+- The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
+- The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast), open the budget, or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
 - The city autosaves every January (a game year is 24 seconds at normal speed) and is offered as **CONTINUE** on the title screen.
 
