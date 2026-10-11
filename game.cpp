@@ -175,6 +175,7 @@ enum Screen {
     SCREEN_CITY,
     SCREEN_PAUSE,
     SCREEN_BUDGET,
+    SCREEN_WON,
 };
 Screen current_screen = SCREEN_TITLE;
 
@@ -186,6 +187,26 @@ bool has_save = false;
 
 // Y shows the stats screen instead of the map.
 bool show_stats = false;
+
+// The goal of the game: grow from a hamlet to a capital. The rank only
+// goes up, so a city that shrinks keeps the best rank it reached.
+constexpr int RANK_COUNT = 5;
+constexpr int RANK_CAPITAL = RANK_COUNT - 1;
+const char *rank_names[RANK_COUNT] = {"HAMLET", "VILLAGE", "TOWN", "CITY", "CAPITAL"};
+const int rank_population[RANK_COUNT] = {0, 500, 2000, 5000, 10000};
+int rank = 0;
+
+// The highest rank this population has earned.
+int rank_for(int people) {
+    int r = 0;
+    while(r < RANK_CAPITAL && people >= rank_population[r + 1]) r++;
+    return r;
+}
+
+// A short message in a box over the map, like "NOW A TOWN!".
+std::string message;
+uint32_t message_time = 0;
+constexpr uint32_t MESSAGE_MS = 4000;
 
 // Cursor position in map tiles, not pixels.
 Point cursor(0, 0);
@@ -335,7 +356,7 @@ void count_city() {
 // byte for byte, so magic and version let us spot a file from another
 // game or an older layout and ignore it.
 constexpr uint32_t SAVE_MAGIC = 0x59544943; // "CITY"
-constexpr uint8_t SAVE_VERSION = 2;
+constexpr uint8_t SAVE_VERSION = 3;
 
 struct SaveData {
     uint32_t magic;
@@ -345,13 +366,18 @@ struct SaveData {
     int32_t money;
     int32_t month;
     int32_t tax_rate; // new in version 2
+    int32_t rank;     // new in version 3
 };
 
-// The version 1 layout, written by Chili City v2.0.0. Version 2 only
-// added fields at the end, so a version 1 file is the same bytes minus
-// those; it loads with the new fields at their defaults.
-constexpr uint8_t SAVE_VERSION_V2_0_0 = 1;
-constexpr size_t SAVE_SIZE_V2_0_0 = offsetof(SaveData, tax_rate);
+// Every version only adds fields at the end, so an older file is the
+// first part of SaveData. This is how many bytes each version wrote;
+// version 1 is Chili City v2.0.0.
+const size_t save_sizes[SAVE_VERSION + 1] = {
+    0,                            // no version 0
+    offsetof(SaveData, tax_rate), // 1
+    offsetof(SaveData, rank),     // 2
+    sizeof(SaveData),             // 3
+};
 
 // When the city was last saved, to show "SAVED" on the HUD for a moment.
 uint32_t saved_time = 0;
@@ -367,22 +393,24 @@ void save_city() {
     save.money = money;
     save.month = month;
     save.tax_rate = tax_rate;
+    save.rank = rank;
     write_save(save);
 }
 
 // Returns false when there is no usable save, so the game starts fresh.
 bool load_city() {
     static SaveData save;
-    bool ok = read_save(save) && save.version == SAVE_VERSION;
-    if(!ok) {
-        // read_save() fails when the file is shorter than asked for, so try
-        // the shorter v2.0.0 size, with the newer fields at their defaults
-        save = SaveData{};
-        save.tax_rate = DEFAULT_TAX_RATE;
-        ok = read_save(reinterpret_cast<char *>(&save), SAVE_SIZE_V2_0_0)
-             && save.version == SAVE_VERSION_V2_0_0;
-    }
-    if(!ok || save.magic != SAVE_MAGIC) {
+    // newer fields keep these defaults when an older, shorter file is read
+    save = SaveData{};
+    save.tax_rate = DEFAULT_TAX_RATE;
+    save.rank = -1; // -1: work it out from the population
+
+    // read_save() fails when the file is shorter than asked for, so read
+    // the magic and version first, then as many bytes as that version wrote
+    char *bytes = reinterpret_cast<char *>(&save);
+    if(!read_save(bytes, offsetof(SaveData, map)) || save.magic != SAVE_MAGIC
+       || save.version < 1 || save.version > SAVE_VERSION
+       || !read_save(bytes, save_sizes[save.version])) {
         return false;
     }
     memcpy(map, save.map, sizeof(map));
@@ -393,6 +421,8 @@ bool load_city() {
     this_year = last_year = Budget();
     have_last_year = false;
     count_city();
+    rank = save.rank >= 0 ? std::min(int(save.rank), RANK_CAPITAL) : rank_for(population);
+    message = "";
     return true;
 }
 
@@ -410,6 +440,8 @@ void new_city() {
     tax_rate = DEFAULT_TAX_RATE;
     this_year = last_year = Budget();
     have_last_year = false;
+    rank = 0;
+    message = "";
     cursor = Point(0, 0);
     camera = Point(0, 0);
     count_city();
@@ -515,6 +547,7 @@ enum Sound {
     SOUND_BROKE,
     SOUND_MONTH,
     SOUND_MENU,
+    SOUND_RANK,
 };
 
 void play(Sound sound) {
@@ -525,6 +558,7 @@ void play(Sound sound) {
         {0, Waveform::SQUARE,   110, 250, 0x8000}, // not enough money: low buzz
         {1, Waveform::TRIANGLE, 1320, 30, 0x2000}, // new month: soft tick
         {0, Waveform::TRIANGLE, 660,  40, 0x6000}, // menu
+        {0, Waveform::SINE,    1046, 600, 0x8000}, // new rank: long bright note
     };
     const Note &n = notes[sound];
     AudioChannel &ch = channels[n.channel];
@@ -555,9 +589,12 @@ void render_stats() {
     screen.clear();
     screen.pen = Pen(255, 255, 255);
 
+    std::string next = rank < RANK_CAPITAL
+        ? std::string("NEXT: ") + rank_names[rank + 1] + " AT " + std::to_string(rank_population[rank + 1])
+        : "ALL RANKS REACHED";
     std::string lines[] = {
-        "CHILI CITY",
-        "",
+        std::string("CHILI CITY: ") + rank_names[rank],
+        next,
         std::string(month_names[month % 12]) + " " + std::to_string(1900 + month / 12),
         "MONEY  $" + std::to_string(money),
         "INCOME $" + std::to_string(last_income) + "/MONTH",
@@ -700,6 +737,7 @@ void render_budget() {
 }
 
 void render_city(uint32_t time);
+void render_won();
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -741,6 +779,9 @@ void render(uint32_t time) {
             break;
         case SCREEN_BUDGET:
             render_budget();
+            break;
+        case SCREEN_WON:
+            render_won();
             break;
         case SCREEN_CITY:
             if(show_stats) {
@@ -829,6 +870,39 @@ void render_city(uint32_t time) {
     // a short note after each autosave, just under the money
     if(was_saved && time - saved_time < 1000) {
         label("SAVED", Point(0, 9), TextAlign::top_left);
+    }
+
+    // a message box in the middle of the screen for a few seconds
+    if(!message.empty() && time - message_time < MESSAGE_MS) {
+        Size size = screen.measure_text(message, minimal_font);
+        Rect box(screen.bounds.w / 2 - size.w / 2 - 4, 40, size.w + 8, size.h + 8);
+        screen.pen = Pen(0, 0, 0);
+        screen.rectangle(box);
+        screen.pen = Pen(255, 200, 0);
+        screen.text(message, minimal_font, Point(box.x + 4, box.y + 4));
+    }
+}
+
+// Shown once, when the city becomes a capital. The game goes on after it.
+void render_won() {
+    screen.pen = Pen(0, 0, 40);
+    screen.clear();
+
+    screen.pen = Pen(255, 200, 0);
+    screen.text("YOU WON!", outline_font, Point(screen.bounds.w / 2, 16), true, TextAlign::top_center);
+
+    screen.pen = Pen(255, 255, 255);
+    std::string lines[] = {
+        "CHILI CITY IS A CAPITAL",
+        "POPULATION " + std::to_string(population),
+        std::string("IN ") + month_names[month % 12] + " " + std::to_string(1900 + month / 12),
+        "",
+        "A: KEEP PLAYING",
+    };
+    int y = 44;
+    for(auto &line : lines) {
+        screen.text(line, minimal_font, Point(screen.bounds.w / 2, y), true, TextAlign::top_center);
+        y += 12;
     }
 }
 
@@ -990,6 +1064,13 @@ void update(uint32_t time) {
             update_budget();
             last_month_time = time;
             return;
+        case SCREEN_WON:
+            if(buttons.pressed & Button::A) {
+                current_screen = SCREEN_CITY;
+                play(SOUND_MENU);
+            }
+            last_month_time = time;
+            return;
         case SCREEN_CITY:
             break;
     }
@@ -1040,6 +1121,18 @@ void update(uint32_t time) {
         last_month_time = time;
         month++;
         simulate();
+
+        // a new rank: tell the player, and at the top rank show the win screen
+        int new_rank = rank_for(population);
+        if(new_rank > rank) {
+            rank = new_rank;
+            message = std::string("NOW A ") + rank_names[rank] + "!";
+            message_time = time;
+            play(SOUND_RANK);
+            if(rank == RANK_CAPITAL) {
+                current_screen = SCREEN_WON;
+            }
+        }
         // a new year: this year's budget becomes last year's
         if(month % 12 == 0) {
             last_year = this_year;
