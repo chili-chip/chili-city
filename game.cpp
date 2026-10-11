@@ -69,8 +69,19 @@ uint8_t level[MAP_H][MAP_W];
 // People living on one residential level.
 constexpr int PEOPLE_PER_LEVEL = 20;
 
-// One game month in real milliseconds. The simulation runs once a month.
-constexpr uint32_t MONTH_MS = 2000;
+// How fast time goes, picked in the pause menu.
+enum Speed {
+    SPEED_PAUSED = 0,
+    SPEED_NORMAL,
+    SPEED_FAST,
+    SPEED_COUNT, // keep last
+};
+Speed speed = SPEED_NORMAL;
+const char *speed_names[SPEED_COUNT] = {"PAUSED", "NORMAL", "FAST"};
+
+// One game month in real milliseconds, per speed. The simulation runs
+// once a month. Paused never ticks.
+const uint32_t month_ms[SPEED_COUNT] = {0, 2000, 500};
 uint32_t last_month_time = 0;
 int month = 0; // months since January 1900
 
@@ -91,6 +102,20 @@ int last_income = 0;    // taxes minus road upkeep last month
 // When the player last tried to build without enough money, to flash the HUD.
 uint32_t broke_time = 0;
 bool was_broke = false;
+
+// Which screen the game is on. The stats screen (Y) is part of the city.
+enum Screen {
+    SCREEN_TITLE,
+    SCREEN_CITY,
+    SCREEN_PAUSE,
+};
+Screen current_screen = SCREEN_TITLE;
+
+// Highlighted line in the title or pause menu.
+int menu_choice = 0;
+
+// true when a saved city was loaded, so the title offers CONTINUE.
+bool has_save = false;
 
 // Y shows the stats screen instead of the map.
 bool show_stats = false;
@@ -181,6 +206,22 @@ bool load_city() {
     month = save.month;
     count_city();
     return true;
+}
+
+// Empty map, starting money, January 1900.
+void new_city() {
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            map[y][x] = TILE_GRASS;
+            level[y][x] = 0;
+        }
+    }
+    money = 5000;
+    month = 0;
+    last_income = 0;
+    cursor = Point(0, 0);
+    camera = Point(0, 0);
+    count_city();
 }
 
 // One month of city life: zones next to roads grow when there is demand,
@@ -287,6 +328,62 @@ void render_stats() {
     }
 }
 
+// Draws menu lines centred from y down, with arrows around the chosen one.
+void render_menu(const char *const *items, int count, int y) {
+    for(int i = 0; i < count; i++) {
+        std::string line = items[i];
+        if(i == menu_choice) {
+            line = "> " + line + " <";
+        }
+        screen.pen = i == menu_choice ? Pen(255, 255, 255) : Pen(150, 150, 150);
+        screen.text(line, minimal_font, Point(screen.bounds.w / 2, y + i * 12), true, TextAlign::top_center);
+    }
+}
+
+// CONTINUE is only offered when there is a saved city.
+const char *title_items_save[] = {"CONTINUE", "NEW CITY"};
+const char *title_items_fresh[] = {"NEW CITY"};
+
+void render_title() {
+    screen.pen = Pen(0, 0, 40);
+    screen.clear();
+
+    // a skyline of fully grown buildings along the bottom
+    int skyline[] = {SPRITE_RESIDENTIAL, SPRITE_COMMERCIAL, SPRITE_INDUSTRIAL};
+    for(int x = 0; x < screen.bounds.w / TILE_SIZE; x++) {
+        screen.sprite(skyline[x % 3] + MAX_LEVEL, Point(x * TILE_SIZE, screen.bounds.h - 2 * TILE_SIZE));
+        screen.sprite(SPRITE_ROAD + 2 + 8, Point(x * TILE_SIZE, screen.bounds.h - TILE_SIZE)); // east-west road
+    }
+
+    screen.pen = Pen(255, 200, 0);
+    screen.text("CHILI CITY", outline_font, Point(screen.bounds.w / 2, 20), true, TextAlign::top_center);
+
+    if(has_save) {
+        render_menu(title_items_save, 2, 56);
+    } else {
+        render_menu(title_items_fresh, 1, 56);
+    }
+}
+
+const char *pause_items[] = {"RESUME", "SPEED", "SAVE + TITLE"};
+constexpr int PAUSE_ITEMS = 3;
+
+// The pause menu, drawn as a box over the frozen city.
+void render_pause() {
+    Rect box(14, 30, screen.bounds.w - 28, 64);
+    screen.pen = Pen(0, 0, 0);
+    screen.rectangle(box);
+    screen.pen = Pen(255, 255, 255);
+    screen.text("PAUSED", minimal_font, Point(screen.bounds.w / 2, box.y + 4), true, TextAlign::top_center);
+
+    // show the current speed in the SPEED line
+    std::string speed_line = std::string("SPEED: ") + speed_names[speed];
+    const char *items[PAUSE_ITEMS] = {pause_items[0], speed_line.c_str(), pause_items[2]};
+    render_menu(items, PAUSE_ITEMS, box.y + 20);
+}
+
+void render_city(uint32_t time);
+
 ///////////////////////////////////////////////////////////////////////////
 //
 // init()
@@ -299,15 +396,11 @@ void init() {
     // the tile pictures; screen.sprite(n, ...) draws sprite n from this sheet
     screen.sprites = Surface::load(asset_tiles);
 
-    for(int y = 0; y < MAP_H; y++) {
-        for(int x = 0; x < MAP_W; x++) {
-            map[y][x] = TILE_GRASS;
-            level[y][x] = 0;
-        }
+    // load the saved city now, so CONTINUE on the title screen is instant
+    has_save = load_city();
+    if(!has_save) {
+        new_city();
     }
-
-    // carry on with the saved city, if there is one
-    load_city();
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -321,11 +414,26 @@ void render(uint32_t time) {
     screen.alpha = 255;
     screen.mask = nullptr;
 
-    if(show_stats) {
-        render_stats();
-        return;
+    switch(current_screen) {
+        case SCREEN_TITLE:
+            render_title();
+            break;
+        case SCREEN_PAUSE:
+            render_city(time);
+            render_pause();
+            break;
+        case SCREEN_CITY:
+            if(show_stats) {
+                render_stats();
+            } else {
+                render_city(time);
+            }
+            break;
     }
+}
 
+// The map with the cursor and the HUD on top.
+void render_city(uint32_t time) {
     int view_w = screen.bounds.w / TILE_SIZE;
     int view_h = screen.bounds.h / TILE_SIZE;
 
@@ -374,6 +482,55 @@ void render(uint32_t time) {
     }
 }
 
+// Up and down move through a menu of count lines, wrapping around.
+void move_menu_choice(int count) {
+    if(buttons.pressed & Button::DPAD_UP)   menu_choice = (menu_choice + count - 1) % count;
+    if(buttons.pressed & Button::DPAD_DOWN) menu_choice = (menu_choice + 1) % count;
+}
+
+void update_title() {
+    int count = has_save ? 2 : 1;
+    move_menu_choice(count);
+
+    if(buttons.pressed & Button::A) {
+        bool continue_city = has_save && menu_choice == 0;
+        if(!continue_city) {
+            new_city();
+        }
+        current_screen = SCREEN_CITY;
+        show_stats = false;
+    }
+}
+
+void update_pause() {
+    move_menu_choice(PAUSE_ITEMS);
+
+    // MENU or B: back to the city
+    if(buttons.pressed & (Button::MENU | Button::B)) {
+        current_screen = SCREEN_CITY;
+        return;
+    }
+
+    bool on_speed = menu_choice == 1;
+    if(on_speed && (buttons.pressed & (Button::A | Button::DPAD_RIGHT))) {
+        speed = Speed((speed + 1) % SPEED_COUNT);
+    }
+    if(on_speed && (buttons.pressed & Button::DPAD_LEFT)) {
+        speed = Speed((speed + SPEED_COUNT - 1) % SPEED_COUNT);
+    }
+
+    if(buttons.pressed & Button::A) {
+        if(menu_choice == 0) {
+            current_screen = SCREEN_CITY;
+        } else if(menu_choice == 2) {
+            save_city();
+            has_save = true;
+            current_screen = SCREEN_TITLE;
+            menu_choice = 0;
+        }
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 //
 // update(time)
@@ -382,6 +539,26 @@ void render(uint32_t time) {
 // amount if milliseconds elapsed since the start of your game
 //
 void update(uint32_t time) {
+    switch(current_screen) {
+        case SCREEN_TITLE:
+            update_title();
+            last_month_time = time; // the city waits while a menu is open
+            return;
+        case SCREEN_PAUSE:
+            update_pause();
+            last_month_time = time;
+            return;
+        case SCREEN_CITY:
+            break;
+    }
+
+    // MENU: pause menu
+    if(buttons.pressed & Button::MENU) {
+        current_screen = SCREEN_PAUSE;
+        menu_choice = 0;
+        return;
+    }
+
     // buttons.pressed only has the buttons that went down since the last
     // update, so holding a direction moves the cursor once, not every frame
     if(buttons.pressed & Button::DPAD_LEFT)  cursor.x--;
@@ -404,7 +581,9 @@ void update(uint32_t time) {
     if(cursor.y > camera.y + view_h - 1) camera.y = cursor.y - view_h + 1;
 
     // run the simulation once per game month
-    if(time - last_month_time >= MONTH_MS) {
+    if(speed == SPEED_PAUSED) {
+        last_month_time = time;
+    } else if(time - last_month_time >= month_ms[speed]) {
         last_month_time = time;
         month++;
         simulate();
