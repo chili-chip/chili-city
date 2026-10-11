@@ -43,11 +43,99 @@ Tool tool = TOOL_ROAD;
 // The city. map[y][x], so a row is one line of tiles.
 uint8_t map[MAP_H][MAP_W];
 
+// How built up each zone tile is: 0 = empty lot, MAX_LEVEL = dense.
+constexpr int MAX_LEVEL = 3;
+uint8_t level[MAP_H][MAP_W];
+
+// People living on one residential level.
+constexpr int PEOPLE_PER_LEVEL = 20;
+
+// One game month in real milliseconds. The simulation runs once a month.
+constexpr uint32_t MONTH_MS = 2000;
+uint32_t last_month_time = 0;
+int month = 0;
+
+int population = 0;
+
 // Cursor position in map tiles, not pixels.
 Point cursor(0, 0);
 
 // Map tile shown in the top-left corner of the screen.
 Point camera(0, 0);
+
+// true if one of the four tiles next to (x, y) is a road
+bool next_to_road(int x, int y) {
+    if(x > 0         && map[y][x - 1] == TILE_ROAD) return true;
+    if(x < MAP_W - 1 && map[y][x + 1] == TILE_ROAD) return true;
+    if(y > 0         && map[y - 1][x] == TILE_ROAD) return true;
+    if(y < MAP_H - 1 && map[y + 1][x] == TILE_ROAD) return true;
+    return false;
+}
+
+// One month of city life: zones next to roads grow when there is demand,
+// zones cut off from roads shrink.
+void simulate() {
+    // count first, so every tile sees the same totals this month
+    int res = 0, com = 0, ind = 0;
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            switch(map[y][x]) {
+                case TILE_RESIDENTIAL: res += level[y][x]; break;
+                case TILE_COMMERCIAL:  com += level[y][x]; break;
+                case TILE_INDUSTRIAL:  ind += level[y][x]; break;
+                default: break;
+            }
+        }
+    }
+
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            uint8_t tile = map[y][x];
+            if(tile != TILE_RESIDENTIAL && tile != TILE_COMMERCIAL && tile != TILE_INDUSTRIAL) {
+                continue;
+            }
+
+            uint8_t &lv = level[y][x];
+            if(!next_to_road(x, y)) {
+                if(lv > 0) lv--;
+                continue;
+            }
+            if(lv >= MAX_LEVEL) {
+                continue;
+            }
+
+            bool demand = false;
+            switch(tile) {
+                case TILE_RESIDENTIAL:
+                    // people move in when there are jobs; the first few come anyway
+                    demand = res < com + ind + 4;
+                    break;
+                case TILE_COMMERCIAL:
+                    // shops need customers
+                    demand = res > com * 2;
+                    break;
+                case TILE_INDUSTRIAL:
+                    // factories need workers
+                    demand = res > ind;
+                    break;
+            }
+
+            // grow slowly and unevenly: a one in three chance each month
+            if(demand && blit::random() % 3 == 0) {
+                lv++;
+            }
+        }
+    }
+
+    population = 0;
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            if(map[y][x] == TILE_RESIDENTIAL) {
+                population += level[y][x] * PEOPLE_PER_LEVEL;
+            }
+        }
+    }
+}
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -61,6 +149,7 @@ void init() {
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
             map[y][x] = TILE_GRASS;
+            level[y][x] = 0;
         }
     }
 }
@@ -104,6 +193,16 @@ void render(uint32_t time) {
                     break;
             }
             screen.rectangle(Rect(sx * TILE_SIZE, sy * TILE_SIZE, TILE_SIZE, TILE_SIZE));
+
+            // buildings: a darker square that gets bigger with the level
+            int lv = level[my][mx];
+            if(lv > 0) {
+                Pen zone = screen.pen;
+                screen.pen = Pen(zone.r / 2, zone.g / 2, zone.b / 2);
+                int size = lv * 2;
+                int offset = 1 + (TILE_SIZE - 1 - size) / 2;
+                screen.rectangle(Rect(sx * TILE_SIZE + offset, sy * TILE_SIZE + offset, size, size));
+            }
         }
     }
 
@@ -132,6 +231,15 @@ void render(uint32_t time) {
     screen.rectangle(Rect(0, 0, size.w + 2, size.h + 2));
     screen.pen = Pen(255, 255, 255);
     screen.text(pos, minimal_font, Point(1, 1));
+
+    // population in the top-right corner
+    std::string pop = "POP " + std::to_string(population);
+    size = screen.measure_text(pop, minimal_font);
+    int tx = screen.bounds.w - size.w - 2;
+    screen.pen = Pen(0, 0, 0);
+    screen.rectangle(Rect(tx, 0, size.w + 2, size.h + 2));
+    screen.pen = Pen(255, 255, 255);
+    screen.text(pop, minimal_font, Point(tx + 1, 1));
 
     // active tool in the bottom-left corner
     std::string_view name = tool_names[tool];
@@ -172,6 +280,13 @@ void update(uint32_t time) {
     if(cursor.x > camera.x + view_w - 1) camera.x = cursor.x - view_w + 1;
     if(cursor.y > camera.y + view_h - 1) camera.y = cursor.y - view_h + 1;
 
+    // run the simulation once per game month
+    if(time - last_month_time >= MONTH_MS) {
+        last_month_time = time;
+        month++;
+        simulate();
+    }
+
     // B: next tool, wrapping back to the first one
     if(buttons.pressed & Button::B) {
         tool = Tool((tool + 1) % TOOL_COUNT);
@@ -196,6 +311,7 @@ void update(uint32_t time) {
                 break;
             case TOOL_BULLDOZER:
                 tile = TILE_GRASS;
+                level[cursor.y][cursor.x] = 0;
                 break;
             default:
                 break;
