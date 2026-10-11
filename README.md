@@ -21,7 +21,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 
 ## How to play
 
-- The map is 32×32 tiles; the screen shows 16×16 and scrolls with the cursor.
+- The map is 64×64 tiles; the screen shows 16×16 and scrolls with the cursor. **MINIMAP** in the pause menu shows the whole city: move the frame with the D-pad and press A to jump there.
 - Zones only grow when they touch a road **and have power**. Unpowered zones blink a yellow bolt.
   - A **power plant** (2×2, placed with the cursor at its top-left corner) powers everything connected to it by **power lines** or by other zones: a zone passes power to the zone next to it. Roads do not carry power.
   - **Residential** grows when there are jobs (the first few homes fill up anyway).
@@ -47,7 +47,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 - Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Disasters can be turned off in the pause menu.
 - **Crime** grows where homes and shops are crowded together. Homes don't grow in high crime, and crime lowers land value. A **police station** cuts crime to a quarter within 6 tiles.
 - The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
-- The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast), open the budget, or save and go back to the title.
+- The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast), open the budget or the minimap, turn disasters off, or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
 - The city autosaves every January (a game year is 24 seconds at normal speed) and is offered as **CONTINUE** on the title screen.
 
