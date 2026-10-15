@@ -16,6 +16,8 @@ Write the tests before the code they test. This applies to every change in behav
 - When a kind of test is not possible here yet (no harness for that layer, or behaviour that only shows on the console), say so in the PR description and list the manual steps you ran instead.
 - Never skip, disable or weaken an existing test to get to green.
 - Name the tests you wrote first in the PR description.
+- **Code coverage: we aim for 80% of lines.** It is a target, not a gate: a pull request below 80% is not refused. Do not lower coverage without a reason in the PR.
+- This repo has no coverage report yet. The change that adds the first tests also adds an informational coverage step to CI, like chili-platform's `coverage` job.
 
 ## Tests in this repo
 
