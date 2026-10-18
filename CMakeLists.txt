@@ -1,5 +1,5 @@
 # Basic parameters; check that these match your project / environment
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15...3.31)
 
 # Replace "game" with a name for your project (this is used the name of the output)
 project(chili-city LANGUAGES C CXX ASM)
