@@ -18,6 +18,23 @@
             }
         },
         {
+            "name": "vgc-blit",
+            "displayName": "vgc (.blit)",
+            "description": "Installable .blit for the VGC Zero loader. Using compilers: C = /usr/bin/arm-none-eabi-gcc, CXX = /usr/bin/arm-none-eabi-g++",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "32BLIT_DIR": "${sourceDir}/../32blit-sdk",
+                "PICO_SDK_PATH": "${sourceDir}/../pico-sdk",
+                "PICO_BOARD": "chilichip_vgc",
+                "PICO_PLATFORM": "rp2350-arm-s",
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../32blit-sdk/pico2.toolchain",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_ASM_COMPILER": "/usr/bin/arm-none-eabi-gcc",
+                "BLIT_EXECUTABLE_PICO_BLIT": "1"
+            }
+        },
+        {
             "name": "linux",
             "displayName": "linux",
             "description": "Using compilers: C = /usr/bin/gcc, CXX = /usr/bin/g++",

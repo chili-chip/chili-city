@@ -1,6 +1,6 @@
 # Chili City
 
-![Build](https://github.com/chili-chip/chili-city/actions/workflows/build.yml/badge.svg)
+[![Build](https://github.com/chili-chip/chili-city/actions/workflows/build.yml/badge.svg)](https://github.com/chili-chip/chili-city/actions/workflows/build.yml)
 
 ![Chili City splash](assets/splash.png)
 
@@ -86,16 +86,25 @@ cmake --build out/build/linux
 ./out/build/linux/chili-city.elf
 ```
 
-**VGC Zero:**
+**VGC Zero (`.blit`, the normal way):**
+
+```
+cmake --preset vgc-blit
+cmake --build out/build/vgc-blit
+```
+
+Plug the console in, copy `out/build/vgc-blit/chili-city.blit` to the **CHILICHIP** drive and eject it. The console installs the game and shows it on the home screen. A newer build replaces the old one and keeps the saved city. See [Installing on the console](https://sdk.chilichip.eu/getting-started/build-console/) for details.
+
+**VGC Zero (standalone `.uf2`, for debugging):**
 
 ```
 cmake --preset vgc
 cmake --build out/build/vgc
 ```
 
-Then hold **BOOT** while plugging the console in, and copy `out/build/vgc/chili-city.uf2` to the `RP2350` drive. The console reboots into the game.
+Hold **BOOT** while plugging the console in, and copy `out/build/vgc/chili-city.uf2` to the `RP2350` drive. This replaces ChiliChip OS: flash `blit-loader.uf2` again afterwards to get the home screen back.
 
-Ready-made `.uf2` files are attached to each [release](https://github.com/chili-chip/chili-city/releases).
+Every push builds the game in CI. The VGC jobs upload `game-blit` and `game-uf2` as workflow artifacts. Each [release](https://github.com/chili-chip/chili-city/releases) has `chili-city.blit` attached.
 
 ## Art
 

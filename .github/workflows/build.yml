@@ -48,6 +48,12 @@ jobs:
             cmake-args: -D32BLIT_DIR=$GITHUB_WORKSPACE/32blit-sdk -DPICO_SDK_PATH=$GITHUB_WORKSPACE/pico-sdk -DPICO_BOARD=chilichip_vgc -DPICO_PLATFORM=rp2350-arm-s -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/32blit-sdk/pico2.toolchain
             apt-packages: gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib python3-setuptools
 
+          - os: ubuntu-22.04
+            name: VGC (.blit)
+            release-suffix: VGC-BLIT
+            cmake-args: -D32BLIT_DIR=$GITHUB_WORKSPACE/32blit-sdk -DPICO_SDK_PATH=$GITHUB_WORKSPACE/pico-sdk -DPICO_BOARD=chilichip_vgc -DPICO_PLATFORM=rp2350-arm-s -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/32blit-sdk/pico2.toolchain -DBLIT_EXECUTABLE_PICO_BLIT=1
+            apt-packages: gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib python3-setuptools
+
           - os: macos-latest
             name: macOS
             release-suffix: MACOS
@@ -77,7 +83,7 @@ jobs:
           path: 32blit-sdk
 
       - name: Checkout Pico SDK
-        if: matrix.name == 'VGC'
+        if: startsWith(matrix.name, 'VGC')
         uses: actions/checkout@v7
         with:
           repository: chili-chip/pico-sdk
@@ -85,7 +91,7 @@ jobs:
           submodules: true
 
       - name: Checkout Pico Extras
-        if: matrix.name == 'VGC'
+        if: startsWith(matrix.name, 'VGC')
         uses: actions/checkout@v7
         with:
           repository: chili-chip/pico-extras
@@ -143,6 +149,29 @@ jobs:
         run: |
           cmake --build . --config $BUILD_TYPE -j 2
 
+      - name: Check the .blit is for the VGC Zero
+        if: matrix.name == 'VGC (.blit)'
+        shell: bash
+        working-directory: ${{runner.workspace}}/main/build
+        run: |
+          python3 - *.blit <<'PY'
+          import struct, sys
+          # BlitGameHeader: magic, render, tick, init, end, then the uint16 device id
+          for path in sys.argv[1:]:
+              magic, device_id = struct.unpack_from('<4s16xH', open(path, 'rb').read())
+              if magic != b'BLIT' or device_id != 3:
+                  sys.exit(f'{path}: not an RP2350 .blit (magic {magic}, device {device_id}), the console would reject it')
+              print(f'{path}: RP2350 .blit')
+          PY
+
+      - name: Upload console build
+        if: startsWith(matrix.name, 'VGC')
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{matrix.name == 'VGC' && 'game-uf2' || 'game-blit'}}
+          path: ${{runner.workspace}}/main/build/*.${{matrix.name == 'VGC' && 'uf2' || 'blit'}}
+          if-no-files-found: error
+
       - name: Package Release
         if: github.event_name == 'release' && matrix.release-suffix != ''
         shell: bash
@@ -161,6 +190,12 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: ${{runner.workspace}}/main/build/${{env.RELEASE_FILE}}.zip
+
+      - name: Upload .blit
+        if: github.event_name == 'release' && matrix.name == 'VGC (.blit)'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{runner.workspace}}/main/build/*.blit
 
       - name: Rename HTML to index.html
         if: matrix.name == 'Emscripten' && github.ref == 'refs/heads/main'
