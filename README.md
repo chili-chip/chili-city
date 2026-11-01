@@ -21,7 +21,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 
 ## How to play
 
-- The map is 64×64 tiles; the screen shows 16×16 and scrolls with the cursor. **MINIMAP** in the pause menu shows the whole city: move the frame with the D-pad and press A to jump there.
+- The map is 64×64 tiles; the screen shows 16×16 and scrolls when the cursor reaches its edge. A city opens with the cursor in the middle of the map, and blinking arrows on the screen edges show that the map goes on until you scroll for the first time. The cursor pulses so it is easy to find. **MINIMAP** in the pause menu shows the whole city: move the frame with the D-pad and press A to jump there.
 - Zones only grow when they touch a road **and have power**. Unpowered zones blink a yellow bolt.
   - A **power plant** (2×2, placed with the cursor at its top-left corner) powers everything connected to it by **power lines** or by other zones: a zone passes power to the zone next to it. Roads do not carry power.
   - **Residential** grows when there are jobs (the first few homes fill up anyway).
@@ -47,9 +47,9 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 - Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Disasters can be turned off in the pause menu.
 - **Crime** grows where homes and shops are crowded together. Homes don't grow in high crime, and crime lowers land value. A **police station** cuts crime to a quarter within 6 tiles.
 - The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
-- The game starts on a title screen: **CONTINUE** the saved city or start a **NEW CITY**. In the pause menu you can set the speed (paused, normal or fast), open the budget, the minimap or the help, turn disasters off, or save and go back to the title.
+- The game starts on a title screen: **CONTINUE** the saved city, start a **NEW CITY**, or start a new city with the **TUTORIAL**. In the pause menu you can set the speed (paused, normal or fast), open the budget, the minimap or the help, turn disasters off, or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
-- A new city shows short **hints** at the top of the screen for the first steps (road, homes, power plant, power lines, jobs). **HELP** in the pause menu has the controls and the rules.
+- **Tutorial.** The very first launch opens on a start screen that says how long the tutorial takes (6 steps, about a minute) and lets you skip it (B). The tutorial is a box at the top of the screen with one step at a time: scroll the map, build a road, homes, a shop or factory, a power line and a power plant. Each step ends as soon as you have done it. The choice is remembered (save slot 1), so the start screen shows only once; **TUTORIAL** on the title screen plays it again in a new city. **HELP** in the pause menu has the controls and the rules.
 - The city autosaves every January (a game year is 24 seconds at normal speed) and is offered as **CONTINUE** on the title screen.
 
 ## Controls
