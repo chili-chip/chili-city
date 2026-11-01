@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -28,11 +29,17 @@ enum Tile : uint8_t {
     TILE_PARK,
     TILE_FIRE_STATION,
     TILE_POLICE_STATION,
+    TILE_TREES, // a forest: bulldoze it to build
+    TILE_WATER, // a lake: nothing can be built on it
 };
 
 // Where each tile's picture is in assets/tiles.png. The sheet is 8 sprites
 // wide, so sprite n is at column n % 8, row n / 8.
 constexpr int SPRITE_GRASS = 0;
+constexpr int SPRITE_TREES = 1;
+constexpr int SPRITE_WATER = 2;        // + wave frame (0..1)
+constexpr int SPRITE_BULLDOZER = 4;    // tool icon in the tool bar
+constexpr int SPRITE_BRIDGE = 5;       // + 0 east-west, + 1 north-south
 constexpr int SPRITE_ROAD = 16;        // + which neighbours are roads (0..15)
 constexpr int SPRITE_RESIDENTIAL = 32; // + level (0..3)
 constexpr int SPRITE_POLICE_STATION = 36;
@@ -74,6 +81,11 @@ const int tool_costs[TOOL_COUNT] = {
     5,  // bulldozer
 };
 
+// A road built on water is a bridge: a TILE_ROAD with level 1, so it
+// joins roads like any other road and turns back into water when
+// bulldozed. It costs more than a road on land.
+constexpr int BRIDGE_COST = 50;
+
 const char *tool_names[TOOL_COUNT] = {
     "ROAD",
     "RES ZONE",
@@ -88,6 +100,32 @@ const char *tool_names[TOOL_COUNT] = {
 };
 
 Tool tool = TOOL_ROAD;
+
+// Each tool's picture in the tool bar (hold B).
+const int tool_icons[TOOL_COUNT] = {
+    SPRITE_ROAD + 2 + 8,       // road, east-west
+    SPRITE_RESIDENTIAL + 1,
+    SPRITE_COMMERCIAL + 1,
+    SPRITE_INDUSTRIAL + 1,
+    SPRITE_POWER_LINE + 2 + 8, // power line, east-west
+    SPRITE_POWER_PLANT,        // top-left quarter of the plant
+    SPRITE_PARK,
+    SPRITE_FIRE_STATION,
+    SPRITE_POLICE_STATION,
+    SPRITE_BULLDOZER,
+};
+
+// Tapping B picks the next tool. Holding B shows the tool bar, where left
+// and right pick any tool in both directions; the cursor stays put.
+constexpr uint32_t TOOL_BAR_DELAY_MS = 250;
+bool b_held_in_city = false;  // B went down on the map
+uint32_t b_down_time = 0;
+bool tool_bar_used = false;   // left/right picked a tool while B was held
+
+bool tool_bar_open(uint32_t time) {
+    return b_held_in_city && (buttons.state & Button::B)
+        && (tool_bar_used || time - b_down_time >= TOOL_BAR_DELAY_MS);
+}
 
 // The city. map[y][x], so a row is one line of tiles.
 uint8_t map[MAP_H][MAP_W];
@@ -214,6 +252,7 @@ enum Screen {
     SCREEN_MINIMAP,
     SCREEN_HELP,
     SCREEN_INTRO, // first launch: how long the tutorial takes, start or skip
+    SCREEN_CONFIRM, // NEW CITY or TUTORIAL over a saved city: really?
 };
 Screen current_screen = SCREEN_TITLE;
 
@@ -265,35 +304,40 @@ const char *hint_lines[HINT_DONE][2] = {
 // shown instead of the last step when a plant is built but powers nothing
 const char *hint_plant_unlinked[2] = {"LINK THE PLANT TO", "A ZONE WITH LINES"};
 
-// The start screen on the very first launch says how long the tutorial
-// takes and lets the player skip it. Remembered in its own save slot, so
-// the city save (slot 0) keeps its format.
+// Player settings that are not part of a city: whether the tutorial start
+// screen was answered (shown on the very first launch) and whether music
+// plays. Kept in their own save slot, so the city save (slot 0) keeps its
+// format.
 constexpr int SETTINGS_SLOT = 1;
 constexpr uint32_t SETTINGS_MAGIC = 0x54455343; // "CSET"
-constexpr uint8_t SETTINGS_VERSION = 1;
-struct TutorialFlag {
+constexpr uint8_t SETTINGS_VERSION = 2;
+struct GameSettings {
     uint32_t magic;
     uint8_t version;
     uint8_t tutorial_seen; // the start screen was answered, start or skip
+    uint8_t music;         // new in version 2 (v3.2.0)
 };
 bool tutorial_seen = false;
+bool music_on = true;
 
-void save_tutorial_flag() {
-    TutorialFlag settings{};
+void save_game_settings() {
+    GameSettings settings{};
     settings.magic = SETTINGS_MAGIC;
     settings.version = SETTINGS_VERSION;
     settings.tutorial_seen = tutorial_seen;
+    settings.music = music_on;
     write_save(settings, SETTINGS_SLOT);
 }
 
 // false when there is no settings slot yet (first launch, or a save made
 // before v3.1.0)
-bool load_tutorial_flag() {
-    TutorialFlag settings{};
+bool load_game_settings() {
+    GameSettings settings{};
     if(!read_save(settings, SETTINGS_SLOT) || settings.magic != SETTINGS_MAGIC) {
         return false;
     }
     tutorial_seen = settings.tutorial_seen != 0;
+    music_on = settings.version < 2 || settings.music != 0; // version 1 had no music switch
     return true;
 }
 
@@ -309,10 +353,10 @@ const char *help_text[HELP_PAGES][11] = {
         "A      BUILD",
         "  HOLD A + MOVE: PAINT",
         "B      NEXT TOOL",
+        "  HOLD B + < >: TOOL BAR",
         "X      OVERLAY",
         "Y      STATS",
         "MENU   PAUSE MENU",
-        "",
     },
     {
         "HOW TO PLAY     2/3",
@@ -325,20 +369,20 @@ const char *help_text[HELP_PAGES][11] = {
         "R C I METER: GREEN =",
         "CITY WANTS MORE OF IT,",
         "RED = TOO MUCH.",
-        "",
+        "X: SEE LAND VALUE",
     },
     {
         "TIPS            3/3",
-        "",
         "FACTORIES POLLUTE:",
         "KEEP HOMES AWAY.",
-        "PARKS RAISE LAND VALUE",
+        "PARKS, TREES, LAKES",
+        "RAISE LAND VALUE.",
         "FIRE AND POLICE",
         "STATIONS GUARD 6 TILES",
         "HIGH TAX SLOWS GROWTH",
-        "",
+        "BULLDOZE TREES FIRST",
+        "ROAD ON WATER: BRIDGE",
         "GOAL: 10000 PEOPLE",
-        "",
     },
 };
 
@@ -365,16 +409,22 @@ uint32_t next_repeat_time = 0;
 Point start_camera(0, 0);
 bool scrolled = false;
 
-// Puts the cursor in the middle of the map and the camera around it, so
-// there is city to build in every direction and the edge arrows show.
-void center_view() {
+// Puts the cursor on a tile and the camera around it, as close to the
+// middle of the screen as the map edges allow.
+void view_at(Point tile) {
     int view_w = screen.bounds.w / TILE_SIZE;
     int view_h = screen.bounds.h / TILE_SIZE;
-    cursor = Point(MAP_W / 2, MAP_H / 2);
+    cursor = tile;
     camera = Point(std::max(0, std::min(MAP_W - view_w, int(cursor.x) - view_w / 2)),
                    std::max(0, std::min(MAP_H - view_h, int(cursor.y) - view_h / 2)));
     start_camera = camera;
     scrolled = false;
+}
+
+// The cursor in the middle of the map, so there is room to build in every
+// direction and the edge arrows show.
+void center_view() {
+    view_at(Point(MAP_W / 2, MAP_H / 2));
 }
 
 // true if one of the four tiles next to (x, y) is a road
@@ -492,6 +542,9 @@ void update_land() {
                 spread(pollution, x, y, level[y][x] * 40, 20);
             } else if(map[y][x] == TILE_PARK) {
                 spread(park_bonus, x, y, 30, 10);
+            } else if(map[y][x] == TILE_TREES || map[y][x] == TILE_WATER || (map[y][x] == TILE_ROAD && level[y][x])) {
+                // nature is nice to live by: +10 next door
+                spread(park_bonus, x, y, 20, 10);
             } else if(map[y][x] == TILE_FIRE_STATION) {
                 cover(fire_covered, x, y, FIRE_STATION_RADIUS);
             } else if(map[y][x] == TILE_POLICE_STATION) {
@@ -544,7 +597,7 @@ void count_city() {
 // byte for byte, so magic and version let us spot a file from another
 // game or an older layout and ignore it.
 constexpr uint32_t SAVE_MAGIC = 0x59544943; // "CITY"
-constexpr uint8_t SAVE_VERSION = 5;
+constexpr uint8_t SAVE_VERSION = 6;
 
 struct SaveData {
     uint32_t magic;
@@ -556,12 +609,16 @@ struct SaveData {
     int32_t tax_rate; // new in version 2
     int32_t rank;     // new in version 3
     int32_t disasters; // new in version 4
+    int32_t cursor_x;  // new in version 6; -1: centre the view
+    int32_t cursor_y;
+    uint8_t fire[MAP_H][MAP_W]; // new in version 6
 };
 
 // Versions 1 to 4 had a 32x32 map. Apart from that they had the same
 // fields, each version adding some at the end, so an older file is the
 // first part of SaveData32. This is how many bytes each one wrote;
-// version 1 is Chili City v2.0.0. Version 5 grew the map to 64x64.
+// version 1 is Chili City v2.0.0. Version 5 grew the map to 64x64, and
+// version 6 (v3.2.0) added the cursor and the fires at the end.
 constexpr int OLD_MAP_SIZE = 32;
 struct SaveData32 {
     uint32_t magic;
@@ -598,6 +655,9 @@ void save_city() {
     save.tax_rate = tax_rate;
     save.rank = rank;
     save.disasters = disasters;
+    save.cursor_x = cursor.x;
+    save.cursor_y = cursor.y;
+    memcpy(save.fire, fire, sizeof(fire));
     write_save(save);
 }
 
@@ -612,8 +672,13 @@ bool load_city() {
        || save.magic != SAVE_MAGIC || save.version < 1 || save.version > SAVE_VERSION) {
         return false;
     }
-    if(save.version == SAVE_VERSION) {
-        if(!read_save(save)) return false;
+    if(save.version >= 5) {
+        // a 64x64 city: version 5 ends before the cursor, which then stays
+        // -1 (centre the view), and fires stay out
+        size_t size = save.version == SAVE_VERSION ? sizeof(SaveData) : offsetof(SaveData, cursor_x);
+        save = SaveData{};
+        save.cursor_x = save.cursor_y = -1;
+        if(!read_save(reinterpret_cast<char *>(&save), size)) return false;
     } else {
         // an older 32x32 city: newer fields keep these defaults when the file
         // is shorter, and the map goes in the top-left corner of the new one
@@ -633,10 +698,11 @@ bool load_city() {
         save.tax_rate = old.tax_rate;
         save.rank = old.rank;
         save.disasters = old.disasters;
+        save.cursor_x = save.cursor_y = -1;
     }
     memcpy(map, save.map, sizeof(map));
     memcpy(level, save.level, sizeof(level));
-    memset(fire, 0, sizeof(fire)); // fires are not saved; they go out
+    memcpy(fire, save.fire, sizeof(fire)); // all zero (out) before version 6
     money = save.money;
     month = save.month;
     disasters = save.disasters != 0;
@@ -647,11 +713,79 @@ bool load_city() {
     rank = save.rank >= 0 ? std::min(int(save.rank), RANK_CAPITAL) : rank_for(population);
     message = "";
     hint_step = HINT_DONE; // a saved city needs no tutorial
-    center_view(); // the cursor is not saved
+    if(save.cursor_x >= 0 && save.cursor_x < MAP_W && save.cursor_y >= 0 && save.cursor_y < MAP_H) {
+        view_at(Point(save.cursor_x, save.cursor_y));
+    } else {
+        center_view();
+    }
     return true;
 }
 
-// Empty map, starting money, January 1900. With tutorial, the hint box
+// Lakes and forests, different in every new city. The middle of the map,
+// where the cursor starts, stays grass so the first roads and zones fit.
+constexpr int CLEAR_RADIUS = 6; // tiles from the middle kept as grass
+constexpr int LAKES = 4;
+constexpr int FORESTS = 12;
+
+bool in_clear_middle(int x, int y) {
+    return abs(x - MAP_W / 2) <= CLEAR_RADIUS && abs(y - MAP_H / 2) <= CLEAR_RADIUS;
+}
+
+// A river two tiles wide winds across the map, top to bottom or left to
+// right. Every RIVER_FORD_EVERY tiles a ford of grass lets roads cross,
+// and the clear middle makes one more.
+constexpr int RIVER_FORD_EVERY = 12;
+
+void generate_river() {
+    bool down = blit::random() % 2; // flows top to bottom, else left to right
+    int across = MAP_W / 4 + blit::random() % (MAP_W / 2); // where it starts
+    int ford_offset = blit::random() % RIVER_FORD_EVERY;
+    int length = down ? MAP_H : MAP_W;
+    int width = down ? MAP_W : MAP_H;
+    for(int along = 0; along < length; along++) {
+        across = std::max(1, std::min(width - 3, across + int(blit::random() % 3) - 1));
+        if((along + ford_offset) % RIVER_FORD_EVERY == 0) continue; // a ford
+        for(int w = 0; w < 2; w++) {
+            int x = down ? across + w : along;
+            int y = down ? along : across + w;
+            if(!in_clear_middle(x, y)) map[y][x] = TILE_WATER;
+        }
+    }
+}
+
+void generate_terrain() {
+    generate_river();
+    // lakes: rough circles of radius 2 to 5, away from the middle
+    for(int i = 0; i < LAKES; i++) {
+        int r = 2 + blit::random() % 4;
+        int cx = blit::random() % MAP_W, cy = blit::random() % MAP_H;
+        for(int y = cy - r - 1; y <= cy + r + 1; y++) {
+            for(int x = cx - r - 1; x <= cx + r + 1; x++) {
+                if(x < 0 || y < 0 || x >= MAP_W || y >= MAP_H || in_clear_middle(x, y)) continue;
+                int d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+                if(d <= r * r + int(blit::random() % (r + 1))) { // a ragged shore
+                    map[y][x] = TILE_WATER;
+                }
+            }
+        }
+    }
+    // forests: patches of radius 2 to 4 on grass, three trees in four
+    for(int i = 0; i < FORESTS; i++) {
+        int r = 2 + blit::random() % 3;
+        int cx = blit::random() % MAP_W, cy = blit::random() % MAP_H;
+        for(int y = cy - r; y <= cy + r; y++) {
+            for(int x = cx - r; x <= cx + r; x++) {
+                if(x < 0 || y < 0 || x >= MAP_W || y >= MAP_H || in_clear_middle(x, y)) continue;
+                int d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+                if(d <= r * r && map[y][x] == TILE_GRASS && blit::random() % 4 != 0) {
+                    map[y][x] = TILE_TREES;
+                }
+            }
+        }
+    }
+}
+
+// A new map, starting money, January 1900. With tutorial, the hint box
 // walks through the first steps.
 void new_city(bool tutorial) {
     for(int y = 0; y < MAP_H; y++) {
@@ -661,6 +795,7 @@ void new_city(bool tutorial) {
             fire[y][x] = 0;
         }
     }
+    generate_terrain();
     money = 5000;
     disasters = true;
     month = 0;
@@ -861,6 +996,91 @@ void play(Sound sound) {
     ch.trigger_attack();
 }
 
+// Background music: two short chiptune loops written for Chili City, a
+// calm one for the title screens and a bouncy one for the city. Each step
+// plays one note (MIDI number, 0 = rest) on channel 2 (melody) and
+// channel 3 (bass), so they never cut off the sound effects on 0 and 1.
+struct Track {
+    const uint8_t *lead;
+    const uint8_t *bass;
+    int steps;
+    uint32_t step_ms;
+};
+
+// Title: C, A minor, F and G arpeggios.
+const uint8_t title_lead[32] = {
+    72, 76, 79, 84, 79, 76, 72, 0,   69, 72, 76, 81, 76, 72, 69, 0,
+    65, 69, 72, 77, 72, 69, 65, 0,   67, 71, 74, 79, 74, 71, 67, 0,
+};
+const uint8_t title_bass[32] = {
+    48, 0, 0, 0, 55, 0, 0, 0,   45, 0, 0, 0, 52, 0, 0, 0,
+    41, 0, 0, 0, 48, 0, 0, 0,   43, 0, 0, 0, 50, 0, 0, 0,
+};
+
+// City: four bars of tune over C, G, A minor and F.
+const uint8_t city_lead[64] = {
+    72, 0, 76, 0, 79, 0, 76, 74,   72, 0, 74, 76, 74, 0, 0, 0,
+    69, 0, 72, 0, 76, 0, 74, 72,   71, 0, 72, 74, 72, 0, 0, 0,
+    77, 0, 76, 0, 74, 0, 72, 0,    74, 0, 76, 77, 79, 0, 0, 0,
+    76, 0, 74, 0, 72, 0, 71, 0,    72, 0, 74, 71, 72, 0, 0, 0,
+};
+const uint8_t city_bass[64] = {
+    48, 0, 55, 0, 48, 0, 55, 0,    53, 0, 60, 0, 55, 0, 50, 0,
+    45, 0, 52, 0, 43, 0, 50, 0,    43, 0, 50, 0, 48, 0, 55, 0,
+    53, 0, 60, 0, 53, 0, 60, 0,    55, 0, 50, 0, 55, 0, 50, 0,
+    48, 0, 55, 0, 43, 0, 50, 0,    43, 0, 50, 0, 48, 0, 48, 0,
+};
+
+enum Music { MUSIC_NONE = -1, MUSIC_TITLE = 0, MUSIC_CITY };
+const Track tracks[2] = {
+    {title_lead, title_bass, 32, 220},
+    {city_lead, city_bass, 64, 150},
+};
+
+// Pitch of a MIDI note: A4 (69) is 440 Hz, 12 notes to an octave.
+uint16_t note_hz(uint8_t note) {
+    return uint16_t(440.0f * powf(2.0f, float(note - 69) / 12.0f));
+}
+
+void play_note(int channel, uint8_t note, uint8_t waveform, uint16_t volume, uint16_t decay_ms) {
+    AudioChannel &ch = channels[channel];
+    ch.off();
+    ch.waveforms = waveform;
+    ch.pulse_width = 0x5000; // a slightly thin square, softer than 50%
+    ch.frequency = note_hz(note);
+    ch.volume = volume;
+    ch.attack_ms = 5;
+    ch.decay_ms = decay_ms;
+    ch.sustain = 0;
+    ch.release_ms = 20;
+    ch.trigger_attack();
+}
+
+Music music = MUSIC_NONE;
+int music_step = 0;
+uint32_t next_step_time = 0;
+
+// Called every update: picks the track for the screen and plays its notes
+// on time. Quiet next to the sound effects, which stay easy to hear.
+void update_music(uint32_t time, Music want) {
+    if(!music_on) want = MUSIC_NONE;
+    if(want != music) {
+        music = want;
+        music_step = 0;
+        next_step_time = time;
+        channels[2].off();
+        channels[3].off();
+    }
+    if(music == MUSIC_NONE || time < next_step_time) return;
+
+    const Track &track = tracks[music];
+    if(track.lead[music_step]) play_note(2, track.lead[music_step], Waveform::SQUARE, 0x1800, 140);
+    if(track.bass[music_step]) play_note(3, track.bass[music_step], Waveform::TRIANGLE, 0x3000, 260);
+    music_step = (music_step + 1) % track.steps;
+    next_step_time += track.step_ms;
+    if(time >= next_step_time) next_step_time = time + track.step_ms; // fell behind: catch up, don't rush
+}
+
 // Draws white text on a black box. align says which corner p is.
 void label(std::string_view text, Point p, TextAlign align, Pen colour = Pen(255, 255, 255)) {
     Size size = screen.measure_text(text, minimal_font);
@@ -934,14 +1154,14 @@ void render_demand() {
 }
 
 // Draws menu lines centred from y down, with arrows around the chosen one.
-void render_menu(const char *const *items, int count, int y) {
+void render_menu(const char *const *items, int count, int y, int spacing = 12) {
     for(int i = 0; i < count; i++) {
         std::string line = items[i];
         if(i == menu_choice) {
             line = "> " + line + " <";
         }
         screen.pen = i == menu_choice ? Pen(255, 255, 255) : Pen(150, 150, 150);
-        screen.text(line, minimal_font, Point(screen.bounds.w / 2, y + i * 12), true, TextAlign::top_center);
+        screen.text(line, minimal_font, Point(screen.bounds.w / 2, y + i * spacing), true, TextAlign::top_center);
     }
 }
 
@@ -1009,9 +1229,35 @@ void render_intro(uint32_t time) {
     screen.text("REPLAY: TITLE MENU", minimal_font, Point(screen.bounds.w / 2, 112), true, TextAlign::top_center);
 }
 
-const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "MINIMAP", "DISASTERS", "HELP", "SAVE + TITLE"};
-constexpr int PAUSE_ITEMS = 7;
-enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_MINIMAP, PAUSE_DISASTERS, PAUSE_HELP, PAUSE_SAVE};
+// NEW CITY or TUTORIAL while a city is saved: the next save would replace
+// it, so ask first. B (the safe answer) is the default.
+bool confirm_tutorial = false; // what A starts: the tutorial or a plain new city
+
+void render_confirm() {
+    screen.pen = Pen(0, 0, 40);
+    screen.clear();
+    const char *lines[] = {
+        "START A NEW CITY?",
+        "",
+        "YOUR SAVED CITY IS",
+        "REPLACED AT THE",
+        "NEXT SAVE.",
+    };
+    screen.pen = Pen(255, 255, 255);
+    int y = 24;
+    for(auto line : lines) {
+        screen.text(line, minimal_font, Point(screen.bounds.w / 2, y), true, TextAlign::top_center);
+        y += 10;
+    }
+    screen.pen = Pen(255, 120, 80);
+    screen.text("A: YES, NEW CITY", minimal_font, Point(screen.bounds.w / 2, 86), true, TextAlign::top_center);
+    screen.pen = Pen(60, 220, 60);
+    screen.text("B: NO, KEEP IT", minimal_font, Point(screen.bounds.w / 2, 98), true, TextAlign::top_center);
+}
+
+const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "MINIMAP", "DISASTERS", "MUSIC", "HELP", "SAVE + TITLE"};
+constexpr int PAUSE_ITEMS = 8;
+enum PauseItem {PAUSE_RESUME, PAUSE_SPEED, PAUSE_BUDGET, PAUSE_MINIMAP, PAUSE_DISASTERS, PAUSE_MUSIC, PAUSE_HELP, PAUSE_SAVE};
 
 // The pause menu, drawn as a box over the frozen city.
 void render_pause() {
@@ -1024,10 +1270,11 @@ void render_pause() {
     // show the current speed in the SPEED line
     std::string speed_line = std::string("SPEED: ") + speed_names[speed];
     std::string disasters_line = std::string("DISASTERS: ") + (disasters ? "ON" : "OFF");
+    std::string music_line = std::string("MUSIC: ") + (music_on ? "ON" : "OFF");
     const char *items[PAUSE_ITEMS] = {pause_items[0], speed_line.c_str(), pause_items[2],
-                                      pause_items[3], disasters_line.c_str(), pause_items[5],
-                                      pause_items[6]};
-    render_menu(items, PAUSE_ITEMS, box.y + 20);
+                                      pause_items[3], disasters_line.c_str(), music_line.c_str(),
+                                      pause_items[6], pause_items[7]};
+    render_menu(items, PAUSE_ITEMS, box.y + 18, 11);
 }
 
 // Money with a sign, like +120 or -40.
@@ -1071,6 +1318,7 @@ void render_city(uint32_t time);
 void render_won();
 void render_minimap(uint32_t time);
 void render_help();
+void save_on_quit();
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -1092,7 +1340,9 @@ void init() {
 
     // the very first launch opens on the tutorial start screen. A city
     // saved by an older version means the game was played before.
-    if(!load_tutorial_flag()) {
+    on_quit = save_on_quit;
+
+    if(!load_game_settings()) {
         tutorial_seen = has_save;
     }
     if(!tutorial_seen) {
@@ -1134,6 +1384,9 @@ void render(uint32_t time) {
         case SCREEN_INTRO:
             render_intro(time);
             break;
+        case SCREEN_CONFIRM:
+            render_confirm();
+            break;
         case SCREEN_CITY:
             if(show_stats) {
                 render_stats();
@@ -1157,7 +1410,16 @@ void render_city(uint32_t time) {
 
             int sprite;
             switch(map[my][mx]) {
-                case TILE_ROAD:        sprite = SPRITE_ROAD + road_mask(mx, my); break;
+                case TILE_ROAD:
+                    if(level[my][mx]) {
+                        // a bridge runs north-south when it only joins roads that way
+                        int mask = road_mask(mx, my);
+                        bool north_south = (mask & (1 | 4)) && !(mask & (2 | 8));
+                        sprite = SPRITE_BRIDGE + (north_south ? 1 : 0);
+                    } else {
+                        sprite = SPRITE_ROAD + road_mask(mx, my);
+                    }
+                    break;
                 case TILE_RESIDENTIAL: sprite = SPRITE_RESIDENTIAL + level[my][mx]; break;
                 case TILE_COMMERCIAL:  sprite = SPRITE_COMMERCIAL + level[my][mx]; break;
                 case TILE_INDUSTRIAL:  sprite = SPRITE_INDUSTRIAL + level[my][mx]; break;
@@ -1166,6 +1428,9 @@ void render_city(uint32_t time) {
                 case TILE_PARK:        sprite = SPRITE_PARK; break;
                 case TILE_FIRE_STATION: sprite = SPRITE_FIRE_STATION; break;
                 case TILE_POLICE_STATION: sprite = SPRITE_POLICE_STATION; break;
+                case TILE_TREES:       sprite = SPRITE_TREES; break;
+                // water ripples: neighbouring tiles swap frames out of step
+                case TILE_WATER:       sprite = SPRITE_WATER + (time / 700 + mx + my) % 2; break;
                 case TILE_GRASS:
                 default:               sprite = SPRITE_GRASS; break;
             }
@@ -1232,7 +1497,29 @@ void render_city(uint32_t time) {
     label(std::string(month_names[month % 12]) + " " + std::to_string(1900 + month / 12),
           Point(screen.bounds.w, screen.bounds.h), TextAlign::bottom_right);
 
-    render_demand();
+    if(tool_bar_open(time)) {
+        // a row of tool pictures above the bottom labels, current one framed
+        int icon = TILE_SIZE + 2;
+        int bar_w = TOOL_COUNT * icon + 2;
+        Rect bar((screen.bounds.w - bar_w) / 2, screen.bounds.h - 9 - 21, bar_w, 21);
+        screen.pen = Pen(0, 0, 0);
+        screen.rectangle(bar);
+        screen.pen = Pen(150, 150, 150);
+        screen.text("< > PICK TOOL", minimal_font, Point(screen.bounds.w / 2, bar.y + 1), true, TextAlign::top_center);
+        for(int t = 0; t < TOOL_COUNT; t++) {
+            Point p(bar.x + 2 + t * icon, bar.y + 11);
+            screen.sprite(tool_icons[t], p);
+            if(t == tool) {
+                screen.pen = Pen(255, 200, 0);
+                screen.rectangle(Rect(p.x - 1, p.y - 1, TILE_SIZE + 2, 1));
+                screen.rectangle(Rect(p.x - 1, p.y + TILE_SIZE, TILE_SIZE + 2, 1));
+                screen.rectangle(Rect(p.x - 1, p.y - 1, 1, TILE_SIZE + 2));
+                screen.rectangle(Rect(p.x + TILE_SIZE, p.y - 1, 1, TILE_SIZE + 2));
+            }
+        }
+    } else {
+        render_demand();
+    }
 
     // a short note after each autosave, just under the money
     if(was_saved && time - saved_time < 1000) {
@@ -1298,6 +1585,8 @@ Pen minimap_colour(int x, int y) {
         case TILE_PARK:           return Pen(40, 200, 60);
         case TILE_FIRE_STATION:   return Pen(220, 50, 40);
         case TILE_POLICE_STATION: return Pen(40, 70, 200);
+        case TILE_TREES:          return Pen(10, 45, 15);
+        case TILE_WATER:          return Pen(40, 90, 190);
         default:                  return Pen(20, 70, 20); // grass
     }
 }
@@ -1371,6 +1660,25 @@ void move_menu_choice(int count) {
     }
 }
 
+// true once a city is on screen, so quitting saves it. Not before: behind
+// the first title screen there may be only an empty map.
+bool city_in_play = false;
+
+void start_playing() {
+    current_screen = SCREEN_CITY;
+    show_stats = false;
+    city_in_play = true;
+}
+
+// The SDK calls this when the player quits: Quit to home or holding HOME
+// on the VGC Zero, closing the window on the desktop. Switching the
+// console off is not caught, so the yearly autosave stays.
+void save_on_quit() {
+    if(city_in_play) {
+        save_city();
+    }
+}
+
 void update_title() {
     int count = has_save ? 3 : 2;
     move_menu_choice(count);
@@ -1378,13 +1686,26 @@ void update_title() {
     if(buttons.pressed & Button::A) {
         // the same lines without CONTINUE when there is no save
         int item = has_save ? menu_choice : menu_choice + 1;
-        if(item == 1) {
-            new_city(false);
-        } else if(item == 2) {
-            new_city(true);
+        if(item != 0 && has_save) {
+            confirm_tutorial = item == 2;
+            current_screen = SCREEN_CONFIRM;
+            return;
         }
-        current_screen = SCREEN_CITY;
-        show_stats = false;
+        if(item != 0) {
+            new_city(item == 2);
+        }
+        start_playing();
+    }
+}
+
+void update_confirm() {
+    if(buttons.pressed & Button::A) {
+        new_city(confirm_tutorial);
+        start_playing();
+        play(SOUND_MENU);
+    } else if(buttons.pressed & (Button::B | Button::MENU)) {
+        current_screen = SCREEN_TITLE;
+        play(SOUND_MENU);
     }
 }
 
@@ -1396,9 +1717,8 @@ void update_intro() {
     }
     new_city(buttons.pressed & Button::A);
     tutorial_seen = true;
-    save_tutorial_flag();
-    current_screen = SCREEN_CITY;
-    show_stats = false;
+    save_game_settings();
+    start_playing();
     play(SOUND_MENU);
 }
 
@@ -1423,6 +1743,11 @@ void update_pause() {
         disasters = !disasters;
         if(!disasters) memset(fire, 0, sizeof(fire)); // off means off: put out every fire
     }
+    bool on_music = menu_choice == PAUSE_MUSIC;
+    if(on_music && (buttons.pressed & (Button::A | Button::DPAD_LEFT | Button::DPAD_RIGHT))) {
+        music_on = !music_on;
+        save_game_settings();
+    }
 
     if(buttons.pressed & Button::A) {
         if(menu_choice == PAUSE_RESUME) {
@@ -1445,10 +1770,15 @@ void update_pause() {
 }
 
 // Uses the current tool on the tile under the cursor and pays for it.
-void use_tool(uint32_t time) {
+// tapped is true for a press of A (not painting): then a build that can't
+// happen on trees or water says why.
+void use_tool(uint32_t time, bool tapped) {
     uint8_t &tile = map[cursor.y][cursor.x];
     uint8_t before = tile;
+    uint8_t before_level = level[cursor.y][cursor.x];
     int cost = tool_costs[tool];
+    bool bridge = tool == TOOL_ROAD && tile == TILE_WATER;
+    if(bridge) cost = BRIDGE_COST;
     if(money < cost) {
         was_broke = true;
         broke_time = time;
@@ -1459,6 +1789,10 @@ void use_tool(uint32_t time) {
         // building only works on empty grass; bulldoze first to replace
         case TOOL_ROAD:
             if(tile == TILE_GRASS) tile = TILE_ROAD;
+            if(bridge) {
+                tile = TILE_ROAD;
+                level[cursor.y][cursor.x] = 1;
+            }
             break;
         case TOOL_RESIDENTIAL:
             if(tile == TILE_GRASS) tile = TILE_RESIDENTIAL;
@@ -1493,6 +1827,14 @@ void use_tool(uint32_t time) {
             }
             break;
         case TOOL_BULLDOZER:
+            if(tile == TILE_WATER) {
+                break; // lakes stay
+            }
+            if(tile == TILE_ROAD && level[cursor.y][cursor.x]) {
+                tile = TILE_WATER; // a bridge comes down into the water
+                level[cursor.y][cursor.x] = 0;
+                break;
+            }
             if(tile == TILE_POWER_PLANT) {
                 // remove the whole plant: find its top-left from the quarter number
                 int part = level[cursor.y][cursor.x];
@@ -1510,8 +1852,17 @@ void use_tool(uint32_t time) {
         default:
             break;
     }
+    if(tile == before && tapped && tool != TOOL_BULLDOZER) {
+        if(before == TILE_TREES) {
+            message = "BULLDOZE TREES FIRST";
+            message_time = time;
+        } else if(before == TILE_WATER) {
+            message = "ONLY ROADS GO ON WATER";
+            message_time = time;
+        }
+    }
     // only pay when something actually changed
-    if(tile != before) {
+    if(tile != before || level[cursor.y][cursor.x] != before_level) {
         money -= cost;
         play(tool == TOOL_BULLDOZER ? SOUND_BULLDOZE : SOUND_BUILD);
 
@@ -1630,6 +1981,10 @@ void update_budget() {
 // amount if milliseconds elapsed since the start of your game
 //
 void update(uint32_t time) {
+    bool on_title = current_screen == SCREEN_TITLE || current_screen == SCREEN_INTRO
+                 || current_screen == SCREEN_CONFIRM;
+    update_music(time, on_title ? MUSIC_TITLE : MUSIC_CITY);
+
     switch(current_screen) {
         case SCREEN_TITLE:
             update_title();
@@ -1655,6 +2010,10 @@ void update(uint32_t time) {
             update_intro();
             last_month_time = time;
             return;
+        case SCREEN_CONFIRM:
+            update_confirm();
+            last_month_time = time;
+            return;
         case SCREEN_WON:
             if(buttons.pressed & Button::A) {
                 current_screen = SCREEN_CITY;
@@ -1670,8 +2029,10 @@ void update(uint32_t time) {
         update_hints(time);
     }
 
-    // MENU: pause menu
+    // MENU: pause menu. A B held now is let go on another screen, so
+    // forget it: its release must not pick a tool later.
     if(buttons.pressed & Button::MENU) {
+        b_held_in_city = false;
         current_screen = SCREEN_PAUSE;
         menu_choice = 0;
         return;
@@ -1679,6 +2040,16 @@ void update(uint32_t time) {
 
     uint32_t move = dpad_moves(time);
     Point old_cursor = cursor;
+    if(tool_bar_open(time) || (b_held_in_city && (buttons.state & Button::B))) {
+        // B held: the D-pad belongs to the tool bar, not the cursor
+        if(move & Button::DPAD_LEFT)  tool = Tool((tool + TOOL_COUNT - 1) % TOOL_COUNT);
+        if(move & Button::DPAD_RIGHT) tool = Tool((tool + 1) % TOOL_COUNT);
+        if(move & (Button::DPAD_LEFT | Button::DPAD_RIGHT)) {
+            tool_bar_used = true;
+            play(SOUND_MENU);
+        }
+        move = 0;
+    }
     if(move & Button::DPAD_LEFT)  cursor.x--;
     if(move & Button::DPAD_RIGHT) cursor.x++;
     if(move & Button::DPAD_UP)    cursor.y--;
@@ -1756,9 +2127,19 @@ void update(uint32_t time) {
         overlay = Overlay((overlay + 1) % OVERLAY_COUNT);
     }
 
-    // B: next tool, wrapping back to the first one
+    // B: tap for the next tool, wrapping back to the first one; hold for
+    // the tool bar. The tap counts when B comes back up, so a hold that
+    // picked a tool in the bar doesn't also skip one.
     if(buttons.pressed & Button::B) {
-        tool = Tool((tool + 1) % TOOL_COUNT);
+        b_held_in_city = true;
+        b_down_time = time;
+        tool_bar_used = false;
+    }
+    if((buttons.released & Button::B) && b_held_in_city) {
+        if(!tool_bar_used) {
+            tool = Tool((tool + 1) % TOOL_COUNT);
+        }
+        b_held_in_city = false;
     }
 
     // A: use the tool on the tile under the cursor. Holding A while moving
@@ -1766,8 +2147,8 @@ void update(uint32_t time) {
     // $1500 plant per step is never what you meant.
     bool moved = cursor != old_cursor;
     if(buttons.pressed & Button::A) {
-        use_tool(time);
+        use_tool(time, true);
     } else if((buttons.state & Button::A) && moved && tool != TOOL_POWER_PLANT) {
-        use_tool(time);
+        use_tool(time, false);
     }
 }

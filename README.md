@@ -22,6 +22,10 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 ## How to play
 
 - The map is 64×64 tiles; the screen shows 16×16 and scrolls when the cursor reaches its edge. A city opens with the cursor in the middle of the map, and blinking arrows on the screen edges show that the map goes on until you scroll for the first time. The cursor pulses so it is easy to find. **MINIMAP** in the pause menu shows the whole city: move the frame with the D-pad and press A to jump there.
+- Every new city has its own land: a winding **river**, **lakes** and **forests**, different each time. The middle of the map, where you start, is always clear grass.
+  - Nothing can be built on water, but a **road** built on water becomes a **bridge** ($50 a tile). The river also has fords of grass every few tiles. Bulldozing a bridge leaves water.
+  - Bulldoze trees ($5) to build where they stand.
+  - Trees and water raise the land value next to them, like small parks. Press **X** until **LAND VALUE** shows to see it: blue is above normal, red below. HELP in the pause menu says the same.
 - Zones only grow when they touch a road **and have power**. Unpowered zones blink a yellow bolt.
   - A **power plant** (2×2, placed with the cursor at its top-left corner) powers everything connected to it by **power lines** or by other zones: a zone passes power to the zone next to it. Roads do not carry power.
   - **Residential** grows when there are jobs (the first few homes fill up anyway).
@@ -35,6 +39,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
   | Tool | Cost |
   |---|---|
   | Road | $10 |
+  | Bridge (road on water) | $50 |
   | Residential / Commercial / Industrial zone | $50 |
   | Power line | $5 |
   | Power plant | $1500 |
@@ -47,10 +52,11 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 - Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Disasters can be turned off in the pause menu.
 - **Crime** grows where homes and shops are crowded together. Homes don't grow in high crime, and crime lowers land value. A **police station** cuts crime to a quarter within 6 tiles.
 - The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
-- The game starts on a title screen: **CONTINUE** the saved city, start a **NEW CITY**, or start a new city with the **TUTORIAL**. In the pause menu you can set the speed (paused, normal or fast), open the budget, the minimap or the help, turn disasters off, or save and go back to the title.
+- The game starts on a title screen: **CONTINUE** the saved city, start a **NEW CITY**, or start a new city with the **TUTORIAL**. When a city is saved, NEW CITY and TUTORIAL ask first, because the next save replaces the old city. In the pause menu you can set the speed (paused, normal or fast), open the budget, the minimap or the help, turn disasters or music off, or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
 - **Tutorial.** The very first launch opens on a start screen that says how long the tutorial takes (6 steps, about a minute) and lets you skip it (B). The tutorial is a box at the top of the screen with one step at a time: scroll the map, build a road, homes, a shop or factory, a power line and a power plant. Each step ends as soon as you have done it. The choice is remembered (save slot 1), so the start screen shows only once; **TUTORIAL** on the title screen plays it again in a new city. **HELP** in the pause menu has the controls and the rules.
-- The city autosaves every January (a game year is 24 seconds at normal speed) and is offered as **CONTINUE** on the title screen.
+- **Saving.** The city saves when you quit the game (Quit to home or holding HOME on the VGC Zero, closing the window on a PC), when you pick SAVE + TITLE, and every January (a game year is 24 seconds at normal speed). Switching the console off is not caught, so the yearly autosave stays. The save keeps the map, money, date, tax rate, fires and where the cursor was; it is offered as **CONTINUE** on the title screen. The web build saves yearly and on SAVE + TITLE.
+- **Music.** Two short chiptune loops written for the game, one for the title and one for the city. Turn them off with MUSIC in the pause menu; the choice is remembered.
 
 ## Controls
 
@@ -59,7 +65,8 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 | Move cursor (hold to keep moving) | D-pad | Arrow keys or WASD |
 | Use tool | A | Z |
 | Paint with tool (roads, zones, lines...) | hold A and move | hold Z and move |
-| Next tool | B | X |
+| Next tool (tap) | B | X |
+| Tool bar: pick any tool, both ways | hold B, then left/right | hold X, then left/right |
 | Stats screen | Y | V |
 | Overlay: pollution, land value, crime, off | X | C |
 | Pause menu (speed, save and quit) | MENU | Esc |
