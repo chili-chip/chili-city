@@ -271,15 +271,15 @@ const char *hint_plant_unlinked[2] = {"LINK THE PLANT TO", "A ZONE WITH LINES"};
 constexpr int SETTINGS_SLOT = 1;
 constexpr uint32_t SETTINGS_MAGIC = 0x54455343; // "CSET"
 constexpr uint8_t SETTINGS_VERSION = 1;
-struct Settings {
+struct TutorialFlag {
     uint32_t magic;
     uint8_t version;
     uint8_t tutorial_seen; // the start screen was answered, start or skip
 };
 bool tutorial_seen = false;
 
-void save_settings() {
-    Settings settings{};
+void save_tutorial_flag() {
+    TutorialFlag settings{};
     settings.magic = SETTINGS_MAGIC;
     settings.version = SETTINGS_VERSION;
     settings.tutorial_seen = tutorial_seen;
@@ -288,8 +288,8 @@ void save_settings() {
 
 // false when there is no settings slot yet (first launch, or a save made
 // before v3.1.0)
-bool load_settings() {
-    Settings settings{};
+bool load_tutorial_flag() {
+    TutorialFlag settings{};
     if(!read_save(settings, SETTINGS_SLOT) || settings.magic != SETTINGS_MAGIC) {
         return false;
     }
@@ -1092,7 +1092,7 @@ void init() {
 
     // the very first launch opens on the tutorial start screen. A city
     // saved by an older version means the game was played before.
-    if(!load_settings()) {
+    if(!load_tutorial_flag()) {
         tutorial_seen = has_save;
     }
     if(!tutorial_seen) {
@@ -1396,7 +1396,7 @@ void update_intro() {
     }
     new_city(buttons.pressed & Button::A);
     tutorial_seen = true;
-    save_settings();
+    save_tutorial_flag();
     current_screen = SCREEN_CITY;
     show_stats = false;
     play(SOUND_MENU);
