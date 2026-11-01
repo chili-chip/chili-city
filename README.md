@@ -25,7 +25,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 - Every new city has its own land: a winding **river**, **lakes** and **forests**, different each time. The middle of the map, where you start, is always clear grass.
   - Nothing can be built on water, but a **road** built on water becomes a **bridge** ($50 a tile). The river also has fords of grass every few tiles. Bulldozing a bridge leaves water.
   - Bulldoze trees ($5) to build where they stand.
-  - Trees and water raise the land value next to them, like small parks.
+  - Trees and water raise the land value next to them, like small parks. Press **X** until **LAND VALUE** shows to see it: blue is above normal, red below. HELP in the pause menu says the same.
 - Zones only grow when they touch a road **and have power**. Unpowered zones blink a yellow bolt.
   - A **power plant** (2×2, placed with the cursor at its top-left corner) powers everything connected to it by **power lines** or by other zones: a zone passes power to the zone next to it. Roads do not carry power.
   - **Residential** grows when there are jobs (the first few homes fill up anyway).

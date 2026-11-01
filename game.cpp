@@ -369,7 +369,7 @@ const char *help_text[HELP_PAGES][11] = {
         "R C I METER: GREEN =",
         "CITY WANTS MORE OF IT,",
         "RED = TOO MUCH.",
-        "",
+        "X: SEE LAND VALUE",
     },
     {
         "TIPS            3/3",
@@ -1770,9 +1770,12 @@ void update_pause() {
 }
 
 // Uses the current tool on the tile under the cursor and pays for it.
-void use_tool(uint32_t time) {
+// tapped is true for a press of A (not painting): then a build that can't
+// happen on trees or water says why.
+void use_tool(uint32_t time, bool tapped) {
     uint8_t &tile = map[cursor.y][cursor.x];
     uint8_t before = tile;
+    uint8_t before_level = level[cursor.y][cursor.x];
     int cost = tool_costs[tool];
     bool bridge = tool == TOOL_ROAD && tile == TILE_WATER;
     if(bridge) cost = BRIDGE_COST;
@@ -1849,8 +1852,17 @@ void use_tool(uint32_t time) {
         default:
             break;
     }
+    if(tile == before && tapped && tool != TOOL_BULLDOZER) {
+        if(before == TILE_TREES) {
+            message = "BULLDOZE TREES FIRST";
+            message_time = time;
+        } else if(before == TILE_WATER) {
+            message = "ONLY ROADS GO ON WATER";
+            message_time = time;
+        }
+    }
     // only pay when something actually changed
-    if(tile != before) {
+    if(tile != before || level[cursor.y][cursor.x] != before_level) {
         money -= cost;
         play(tool == TOOL_BULLDOZER ? SOUND_BULLDOZE : SOUND_BUILD);
 
@@ -2017,8 +2029,10 @@ void update(uint32_t time) {
         update_hints(time);
     }
 
-    // MENU: pause menu
+    // MENU: pause menu. A B held now is let go on another screen, so
+    // forget it: its release must not pick a tool later.
     if(buttons.pressed & Button::MENU) {
+        b_held_in_city = false;
         current_screen = SCREEN_PAUSE;
         menu_choice = 0;
         return;
@@ -2133,8 +2147,8 @@ void update(uint32_t time) {
     // $1500 plant per step is never what you meant.
     bool moved = cursor != old_cursor;
     if(buttons.pressed & Button::A) {
-        use_tool(time);
+        use_tool(time, true);
     } else if((buttons.state & Button::A) && moved && tool != TOOL_POWER_PLANT) {
-        use_tool(time);
+        use_tool(time, false);
     }
 }
