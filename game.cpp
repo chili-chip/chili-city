@@ -213,6 +213,7 @@ enum Screen {
     SCREEN_WON,
     SCREEN_MINIMAP,
     SCREEN_HELP,
+    SCREEN_INTRO, // first launch: how long the tutorial takes, start or skip
 };
 Screen current_screen = SCREEN_TITLE;
 
@@ -240,25 +241,61 @@ int rank_for(int people) {
     return r;
 }
 
-// First-game hints: in a new city, a box at the top of the screen walks
-// through the first steps. Each step ends when its goal is met.
+// The tutorial: in a new city, a box at the top of the screen walks
+// through the first steps. Each step ends when its goal is met. The steps
+// follow the order of the tools, so each one is a single B press away.
 enum HintStep {
-    HINT_ROAD = 0,
+    HINT_SCROLL = 0,
+    HINT_ROAD,
     HINT_HOMES,
-    HINT_PLANT,
-    HINT_POWER,
     HINT_JOBS,
-    HINT_DONE, // keep last; also used for loaded cities: no hints
+    HINT_LINES,
+    HINT_PLANT,
+    HINT_DONE, // keep last; also used for loaded or skipped cities: no hints
 };
 HintStep hint_step = HINT_DONE;
 const char *hint_lines[HINT_DONE][2] = {
+    {"D-PAD: MOVE CURSOR", "PUSH EDGE: MAP SCROLLS"},
     {"A: BUILD A ROAD", "HOLD A + MOVE: LONGER"},
     {"B: PICK RES ZONE", "BUILD IT BY THE ROAD"},
-    {"B: PICK PLANT ($1500)", "BUILD IT ON GRASS"},
-    {"LINK PLANT AND ZONES", "WITH POWER LINES"},
-    {"HOMES GROW! ADD COM", "AND IND ZONES FOR JOBS"},
+    {"B: PICK COM OR IND", "ZONE BY THE ROAD: JOBS"},
+    {"B: PICK POWER LINE", "LAY IT FROM A ZONE"},
+    {"B: PICK PLANT ($1500)", "PUT IT BY THE LINE"},
 };
-constexpr int HINT_DONE_POPULATION = 100; // the last hint stays until then
+// shown instead of the last step when a plant is built but powers nothing
+const char *hint_plant_unlinked[2] = {"LINK THE PLANT TO", "A ZONE WITH LINES"};
+
+// The start screen on the very first launch says how long the tutorial
+// takes and lets the player skip it. Remembered in its own save slot, so
+// the city save (slot 0) keeps its format.
+constexpr int SETTINGS_SLOT = 1;
+constexpr uint32_t SETTINGS_MAGIC = 0x54455343; // "CSET"
+constexpr uint8_t SETTINGS_VERSION = 1;
+struct TutorialFlag {
+    uint32_t magic;
+    uint8_t version;
+    uint8_t tutorial_seen; // the start screen was answered, start or skip
+};
+bool tutorial_seen = false;
+
+void save_tutorial_flag() {
+    TutorialFlag settings{};
+    settings.magic = SETTINGS_MAGIC;
+    settings.version = SETTINGS_VERSION;
+    settings.tutorial_seen = tutorial_seen;
+    write_save(settings, SETTINGS_SLOT);
+}
+
+// false when there is no settings slot yet (first launch, or a save made
+// before v3.1.0)
+bool load_tutorial_flag() {
+    TutorialFlag settings{};
+    if(!read_save(settings, SETTINGS_SLOT) || settings.magic != SETTINGS_MAGIC) {
+        return false;
+    }
+    tutorial_seen = settings.tutorial_seen != 0;
+    return true;
+}
 
 // HELP in the pause menu: pages of controls and rules, left/right to turn.
 int help_page = 0;
@@ -268,13 +305,13 @@ const char *help_text[HELP_PAGES][11] = {
         "CONTROLS        1/3",
         "",
         "D-PAD  MOVE CURSOR",
+        "  AT EDGE: MAP SCROLLS",
         "A      BUILD",
         "  HOLD A + MOVE: PAINT",
         "B      NEXT TOOL",
         "X      OVERLAY",
         "Y      STATS",
         "MENU   PAUSE MENU",
-        "",
         "",
     },
     {
@@ -321,6 +358,24 @@ Point camera(0, 0);
 constexpr uint32_t REPEAT_DELAY_MS = 300;
 constexpr uint32_t REPEAT_RATE_MS = 80;
 uint32_t next_repeat_time = 0;
+
+// Where the camera was when the city opened. Until the player scrolls
+// away from it, blinking arrows at the screen edges show that the map
+// goes on past the screen.
+Point start_camera(0, 0);
+bool scrolled = false;
+
+// Puts the cursor in the middle of the map and the camera around it, so
+// there is city to build in every direction and the edge arrows show.
+void center_view() {
+    int view_w = screen.bounds.w / TILE_SIZE;
+    int view_h = screen.bounds.h / TILE_SIZE;
+    cursor = Point(MAP_W / 2, MAP_H / 2);
+    camera = Point(std::max(0, std::min(MAP_W - view_w, int(cursor.x) - view_w / 2)),
+                   std::max(0, std::min(MAP_H - view_h, int(cursor.y) - view_h / 2)));
+    start_camera = camera;
+    scrolled = false;
+}
 
 // true if one of the four tiles next to (x, y) is a road
 bool next_to_road(int x, int y) {
@@ -591,12 +646,14 @@ bool load_city() {
     count_city();
     rank = save.rank >= 0 ? std::min(int(save.rank), RANK_CAPITAL) : rank_for(population);
     message = "";
-    hint_step = HINT_DONE; // a saved city needs no first-game hints
+    hint_step = HINT_DONE; // a saved city needs no tutorial
+    center_view(); // the cursor is not saved
     return true;
 }
 
-// Empty map, starting money, January 1900.
-void new_city() {
+// Empty map, starting money, January 1900. With tutorial, the hint box
+// walks through the first steps.
+void new_city(bool tutorial) {
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
             map[y][x] = TILE_GRASS;
@@ -613,9 +670,8 @@ void new_city() {
     have_last_year = false;
     rank = 0;
     message = "";
-    hint_step = HINT_ROAD;
-    cursor = Point(0, 0);
-    camera = Point(0, 0);
+    hint_step = tutorial ? HINT_SCROLL : HINT_DONE;
+    center_view();
     count_city();
 }
 
@@ -889,9 +945,10 @@ void render_menu(const char *const *items, int count, int y) {
     }
 }
 
-// CONTINUE is only offered when there is a saved city.
-const char *title_items_save[] = {"CONTINUE", "NEW CITY"};
-const char *title_items_fresh[] = {"NEW CITY"};
+// CONTINUE is only offered when there is a saved city. TUTORIAL starts a
+// new city with the tutorial, for anyone who skipped it or wants it again.
+const char *title_items_save[] = {"CONTINUE", "NEW CITY", "TUTORIAL"};
+const char *title_items_fresh[] = {"NEW CITY", "TUTORIAL"};
 
 void render_title() {
     screen.pen = Pen(0, 0, 40);
@@ -908,10 +965,48 @@ void render_title() {
     screen.text("CHILI CITY", outline_font, Point(screen.bounds.w / 2, 20), true, TextAlign::top_center);
 
     if(has_save) {
-        render_menu(title_items_save, 2, 56);
+        render_menu(title_items_save, 3, 52);
     } else {
-        render_menu(title_items_fresh, 1, 56);
+        render_menu(title_items_fresh, 2, 56);
     }
+}
+
+// How many steps the tutorial has and about how long it takes, for the
+// start screen. Six short steps, each one a button press or two away.
+constexpr int TUTORIAL_STEPS = HINT_DONE;
+const char *const TUTORIAL_LENGTH = "ABOUT 1 MINUTE";
+
+// First launch: welcome, how long the tutorial takes, and how to skip it.
+void render_intro(uint32_t time) {
+    screen.pen = Pen(0, 0, 40);
+    screen.clear();
+
+    screen.pen = Pen(255, 200, 0);
+    screen.text("CHILI CITY", outline_font, Point(screen.bounds.w / 2, 8), true, TextAlign::top_center);
+
+    std::string steps = std::to_string(TUTORIAL_STEPS) + " STEPS, " + TUTORIAL_LENGTH;
+    const char *lines[] = {
+        "WELCOME, MAYOR!",
+        "",
+        "SHORT TUTORIAL:",
+        steps.c_str(),
+    };
+    screen.pen = Pen(255, 255, 255);
+    int y = 32;
+    for(auto line : lines) {
+        screen.text(line, minimal_font, Point(screen.bounds.w / 2, y), true, TextAlign::top_center);
+        y += 10;
+    }
+
+    // the start choice blinks, so the screen is never still
+    if((time / 400) % 2 == 0) {
+        screen.pen = Pen(60, 220, 60);
+        screen.text("A: START TUTORIAL", minimal_font, Point(screen.bounds.w / 2, 80), true, TextAlign::top_center);
+    }
+    screen.pen = Pen(255, 255, 255);
+    screen.text("B: SKIP", minimal_font, Point(screen.bounds.w / 2, 92), true, TextAlign::top_center);
+    screen.pen = Pen(150, 150, 150);
+    screen.text("REPLAY: TITLE MENU", minimal_font, Point(screen.bounds.w / 2, 112), true, TextAlign::top_center);
 }
 
 const char *pause_items[] = {"RESUME", "SPEED", "BUDGET", "MINIMAP", "DISASTERS", "HELP", "SAVE + TITLE"};
@@ -992,7 +1087,16 @@ void init() {
     // load the saved city now, so CONTINUE on the title screen is instant
     has_save = load_city();
     if(!has_save) {
-        new_city();
+        new_city(false);
+    }
+
+    // the very first launch opens on the tutorial start screen. A city
+    // saved by an older version means the game was played before.
+    if(!load_tutorial_flag()) {
+        tutorial_seen = has_save;
+    }
+    if(!tutorial_seen) {
+        current_screen = SCREEN_INTRO;
     }
 }
 
@@ -1026,6 +1130,9 @@ void render(uint32_t time) {
             break;
         case SCREEN_HELP:
             render_help();
+            break;
+        case SCREEN_INTRO:
+            render_intro(time);
             break;
         case SCREEN_CITY:
             if(show_stats) {
@@ -1096,14 +1203,20 @@ void render_city(uint32_t time) {
         }
     }
 
-    // cursor: white frame around the selected tile, in screen pixels
-    screen.pen = Pen(255, 255, 255);
-    int px = (cursor.x - camera.x) * TILE_SIZE;
-    int py = (cursor.y - camera.y) * TILE_SIZE;
-    screen.rectangle(Rect(px, py, TILE_SIZE, 1));                 // top
-    screen.rectangle(Rect(px, py + TILE_SIZE - 1, TILE_SIZE, 1)); // bottom
-    screen.rectangle(Rect(px, py, 1, TILE_SIZE));                 // left
-    screen.rectangle(Rect(px + TILE_SIZE - 1, py, 1, TILE_SIZE)); // right
+    // cursor: a frame around the selected tile, in screen pixels. It
+    // pulses, white and one pixel bigger, then yellow and tile sized, so
+    // the eye finds it at once. It never disappears, so moving and
+    // painting stay easy to follow.
+    bool pulse = (time / 300) % 2 == 0;
+    screen.pen = pulse ? Pen(255, 255, 255) : Pen(255, 200, 0);
+    int grow = pulse ? 1 : 0;
+    int px = (cursor.x - camera.x) * TILE_SIZE - grow;
+    int py = (cursor.y - camera.y) * TILE_SIZE - grow;
+    int size = TILE_SIZE + 2 * grow;
+    screen.rectangle(Rect(px, py, size, 1));            // top
+    screen.rectangle(Rect(px, py + size - 1, size, 1)); // bottom
+    screen.rectangle(Rect(px, py, 1, size));            // left
+    screen.rectangle(Rect(px + size - 1, py, 1, size)); // right
 
     // HUD: money top-left (red for a moment after a failed build),
     // population top-right, tool and cost bottom-left, date bottom-right
@@ -1126,15 +1239,34 @@ void render_city(uint32_t time) {
         label("SAVED", Point(0, 9), TextAlign::top_left);
     }
 
-    // first-game hint: two lines in a box under the top labels
+    // until the player scrolls: blinking arrows on the edges where the
+    // map goes on, to show it is bigger than the screen
+    if(!scrolled && (time / 400) % 2 == 0) {
+        int view_w = screen.bounds.w / TILE_SIZE;
+        int view_h = screen.bounds.h / TILE_SIZE;
+        int w = screen.bounds.w, h = screen.bounds.h;
+        int cx = w / 2, cy = h / 2;
+        screen.pen = Pen(255, 255, 255);
+        if(camera.y > 0)              screen.triangle(Point(cx, 11), Point(cx - 4, 15), Point(cx + 4, 15));
+        if(camera.y < MAP_H - view_h) screen.triangle(Point(cx, h - 12), Point(cx - 4, h - 16), Point(cx + 4, h - 16));
+        if(camera.x > 0)              screen.triangle(Point(1, cy), Point(5, cy - 4), Point(5, cy + 4));
+        if(camera.x < MAP_W - view_w) screen.triangle(Point(w - 2, cy), Point(w - 6, cy - 4), Point(w - 6, cy + 4));
+    }
+
+    // tutorial: step number and two lines in a box under the top labels
     if(hint_step < HINT_DONE) {
-        Rect box(0, 18, screen.bounds.w, 20);
+        Rect box(0, 18, screen.bounds.w, 29);
         screen.pen = Pen(0, 0, 0, 200);
         screen.rectangle(box);
+        screen.pen = Pen(150, 150, 150);
+        std::string header = "TUTORIAL " + std::to_string(hint_step + 1) + "/" + std::to_string(TUTORIAL_STEPS);
+        screen.text(header, minimal_font, Point(screen.bounds.w / 2, box.y + 2), true, TextAlign::top_center);
+        const char *const *lines = hint_step == HINT_PLANT && plant_count > 0
+            ? hint_plant_unlinked : hint_lines[hint_step];
         screen.pen = Pen(255, 200, 0);
         for(int i = 0; i < 2; i++) {
-            screen.text(hint_lines[hint_step][i], minimal_font,
-                        Point(screen.bounds.w / 2, box.y + 2 + i * 9), true, TextAlign::top_center);
+            screen.text(lines[i], minimal_font,
+                        Point(screen.bounds.w / 2, box.y + 11 + i * 9), true, TextAlign::top_center);
         }
     }
 
@@ -1240,17 +1372,34 @@ void move_menu_choice(int count) {
 }
 
 void update_title() {
-    int count = has_save ? 2 : 1;
+    int count = has_save ? 3 : 2;
     move_menu_choice(count);
 
     if(buttons.pressed & Button::A) {
-        bool continue_city = has_save && menu_choice == 0;
-        if(!continue_city) {
-            new_city();
+        // the same lines without CONTINUE when there is no save
+        int item = has_save ? menu_choice : menu_choice + 1;
+        if(item == 1) {
+            new_city(false);
+        } else if(item == 2) {
+            new_city(true);
         }
         current_screen = SCREEN_CITY;
         show_stats = false;
     }
+}
+
+// First launch: A starts a new city with the tutorial, B one without.
+// Either way the answer is remembered and the screen never shows again.
+void update_intro() {
+    if(!(buttons.pressed & (Button::A | Button::B))) {
+        return;
+    }
+    new_city(buttons.pressed & Button::A);
+    tutorial_seen = true;
+    save_tutorial_flag();
+    current_screen = SCREEN_CITY;
+    show_stats = false;
+    play(SOUND_MENU);
 }
 
 void update_pause() {
@@ -1424,28 +1573,39 @@ void update_help() {
     }
 }
 
-// Moves the first-game hints on once the player has done each step.
-void update_hints() {
-    bool done = false;
-    switch(hint_step) {
-        case HINT_ROAD:  done = road_count > 0; break;
-        case HINT_PLANT: done = plant_count > 0; break;
-        case HINT_JOBS:  done = population >= HINT_DONE_POPULATION; break;
-        case HINT_HOMES:
-        case HINT_POWER:
-            // any residential zone (homes), or any powered zone (power)
-            for(int y = 0; y < MAP_H && !done; y++) {
-                for(int x = 0; x < MAP_W && !done; x++) {
-                    done = hint_step == HINT_HOMES ? map[y][x] == TILE_RESIDENTIAL
-                                                   : is_zone(map[y][x]) && powered[y][x];
-                }
-            }
-            break;
-        default:
-            break;
+// true when the goal of a tutorial step is met somewhere on the map
+bool hint_goal_met(HintStep step) {
+    switch(step) {
+        case HINT_SCROLL: return scrolled;
+        case HINT_ROAD:   return road_count > 0;
+        default:          break;
     }
-    if(done) {
-        hint_step = HintStep(hint_step + 1);
+    for(int y = 0; y < MAP_H; y++) {
+        for(int x = 0; x < MAP_W; x++) {
+            uint8_t tile = map[y][x];
+            switch(step) {
+                case HINT_HOMES: if(tile == TILE_RESIDENTIAL) return true; break;
+                case HINT_JOBS:  if(tile == TILE_COMMERCIAL || tile == TILE_INDUSTRIAL) return true; break;
+                case HINT_LINES: if(tile == TILE_POWER_LINE) return true; break;
+                case HINT_PLANT: if(is_zone(tile) && powered[y][x]) return true; break;
+                default: break;
+            }
+        }
+    }
+    return false;
+}
+
+// Moves the tutorial on once the player has done each step, and says so
+// when it is over.
+void update_hints(uint32_t time) {
+    if(!hint_goal_met(hint_step)) {
+        return;
+    }
+    hint_step = HintStep(hint_step + 1);
+    if(hint_step == HINT_DONE) {
+        message = "DONE! NOW WATCH IT GROW";
+        message_time = time;
+        play(SOUND_RANK);
     }
 }
 
@@ -1491,6 +1651,10 @@ void update(uint32_t time) {
             update_help();
             last_month_time = time;
             return;
+        case SCREEN_INTRO:
+            update_intro();
+            last_month_time = time;
+            return;
         case SCREEN_WON:
             if(buttons.pressed & Button::A) {
                 current_screen = SCREEN_CITY;
@@ -1503,7 +1667,7 @@ void update(uint32_t time) {
     }
 
     if(hint_step < HINT_DONE) {
-        update_hints();
+        update_hints(time);
     }
 
     // MENU: pause menu
@@ -1533,6 +1697,9 @@ void update(uint32_t time) {
     if(cursor.y < camera.y) camera.y = cursor.y;
     if(cursor.x > camera.x + view_w - 1) camera.x = cursor.x - view_w + 1;
     if(cursor.y > camera.y + view_h - 1) camera.y = cursor.y - view_h + 1;
+    if(camera != start_camera) {
+        scrolled = true; // the edge arrows did their job
+    }
 
     // run the simulation once per game month
     if(speed == SPEED_PAUSED) {
