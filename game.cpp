@@ -31,6 +31,7 @@ enum Tile : uint8_t {
     TILE_POLICE_STATION,
     TILE_TREES, // a forest: bulldoze it to build
     TILE_WATER, // a lake: nothing can be built on it
+    TILE_WATER_PUMP, // pumps water to zones within PUMP_RADIUS; built next to water
 };
 
 // Where each tile's picture is in assets/tiles.png. The sheet is 8 sprites
@@ -40,6 +41,9 @@ constexpr int SPRITE_TREES = 1;
 constexpr int SPRITE_WATER = 2;        // + wave frame (0..1)
 constexpr int SPRITE_BULLDOZER = 4;    // tool icon in the tool bar
 constexpr int SPRITE_BRIDGE = 5;       // + 0 east-west, + 1 north-south
+constexpr int SPRITE_WATER_PUMP = 7;
+constexpr int SPRITE_NO_WATER = 8;     // drop drawn over zones without water
+constexpr int SPRITE_TORNADO = 9;      // + frame (0..1)
 constexpr int SPRITE_ROAD = 16;        // + which neighbours are roads (0..15)
 constexpr int SPRITE_RESIDENTIAL = 32; // + level (0..3)
 constexpr int SPRITE_POLICE_STATION = 36;
@@ -63,6 +67,7 @@ enum Tool {
     TOOL_PARK,
     TOOL_FIRE_STATION,
     TOOL_POLICE_STATION,
+    TOOL_WATER_PUMP,
     TOOL_BULLDOZER,
     TOOL_COUNT, // number of tools, keep last
 };
@@ -78,6 +83,7 @@ const int tool_costs[TOOL_COUNT] = {
     20, // park
     500, // fire station
     500, // police station
+    300, // water pump
     5,  // bulldozer
 };
 
@@ -96,6 +102,7 @@ const char *tool_names[TOOL_COUNT] = {
     "PARK",
     "FIRE STN",
     "POLICE",
+    "WATER PUMP",
     "BULLDOZE",
 };
 
@@ -112,6 +119,7 @@ const int tool_icons[TOOL_COUNT] = {
     SPRITE_PARK,
     SPRITE_FIRE_STATION,
     SPRITE_POLICE_STATION,
+    SPRITE_WATER_PUMP,
     SPRITE_BULLDOZER,
 };
 
@@ -145,6 +153,12 @@ constexpr int BURN_MONTHS = 3;
 bool fire_covered[MAP_H][MAP_W];
 constexpr int FIRE_STATION_RADIUS = 6; // tiles in each direction
 
+// Tiles a water pump reaches, worked out by update_land(). Zones grow past
+// their first level only with water.
+bool watered[MAP_H][MAP_W];
+constexpr int PUMP_RADIUS = 8;
+constexpr int PUMP_UPKEEP = 10;
+
 // Crime, 0..255, worked out by update_land(): dense homes and shops breed
 // it, police stations keep it down. Homes stop growing in high crime, and
 // crime lowers land value.
@@ -174,10 +188,11 @@ enum Overlay {
     OVERLAY_POLLUTION,
     OVERLAY_LAND_VALUE,
     OVERLAY_CRIME,
+    OVERLAY_WATER,
     OVERLAY_COUNT, // keep last
 };
 Overlay overlay = OVERLAY_NONE;
-const char *overlay_names[OVERLAY_COUNT] = {"", "POLLUTION", "LAND VALUE", "CRIME"};
+const char *overlay_names[OVERLAY_COUNT] = {"", "POLLUTION", "LAND VALUE", "CRIME", "WATER"};
 
 // People living on one residential level.
 constexpr int PEOPLE_PER_LEVEL = 20;
@@ -210,6 +225,7 @@ int road_count = 0;
 int plant_count = 0; // power plants, not tiles: each plant is 4 tiles
 int fire_station_count = 0;
 int police_station_count = 0;
+int pump_count = 0;
 
 // Money. Building costs money, taxes bring it in once a month.
 int money = 5000;
@@ -233,7 +249,7 @@ struct Budget {
     int taxes = 0;
     int roads = 0;
     int power = 0;
-    int services = 0; // fire and police stations
+    int services = 0; // fire and police stations, water pumps
 };
 Budget this_year, last_year;
 bool have_last_year = false; // false until a year ends after a new game or load
@@ -360,16 +376,16 @@ const char *help_text[HELP_PAGES][11] = {
     },
     {
         "HOW TO PLAY     2/3",
-        "",
-        "ZONES ONLY GROW NEXT",
-        "TO A ROAD, WITH POWER.",
+        "ZONES GROW BY A ROAD,",
+        "WITH POWER. BIGGER",
+        "ONES NEED WATER: PUMP",
+        "BY A LAKE OR RIVER.",
         "A PLANT POWERS ZONES",
         "LINKED BY LINES OR",
         "BY OTHER ZONES.",
-        "R C I METER: GREEN =",
-        "CITY WANTS MORE OF IT,",
+        "R C I: GREEN = WANTED,",
         "RED = TOO MUCH.",
-        "X: SEE LAND VALUE",
+        "X: LAND VALUE, WATER..",
     },
     {
         "TIPS            3/3",
@@ -445,6 +461,15 @@ int road_mask(int x, int y) {
     if(y < MAP_H - 1 && map[y + 1][x] == TILE_ROAD) mask |= 4;
     if(x > 0         && map[y][x - 1] == TILE_ROAD) mask |= 8;
     return mask;
+}
+
+// true if one of the four tiles next to (x, y) is a lake or river
+bool next_to_water(int x, int y) {
+    if(x > 0         && map[y][x - 1] == TILE_WATER) return true;
+    if(x < MAP_W - 1 && map[y][x + 1] == TILE_WATER) return true;
+    if(y > 0         && map[y - 1][x] == TILE_WATER) return true;
+    if(y < MAP_H - 1 && map[y + 1][x] == TILE_WATER) return true;
+    return false;
 }
 
 bool is_zone(uint8_t tile) {
@@ -532,6 +557,7 @@ void update_land() {
     memset(pollution, 0, sizeof(pollution));
     memset(park_bonus, 0, sizeof(park_bonus));
     memset(fire_covered, 0, sizeof(fire_covered));
+    memset(watered, 0, sizeof(watered));
     memset(crime, 0, sizeof(crime));
     memset(police_covered, 0, sizeof(police_covered));
 
@@ -549,6 +575,8 @@ void update_land() {
                 cover(fire_covered, x, y, FIRE_STATION_RADIUS);
             } else if(map[y][x] == TILE_POLICE_STATION) {
                 cover(police_covered, x, y, POLICE_STATION_RADIUS);
+            } else if(map[y][x] == TILE_WATER_PUMP) {
+                cover(watered, x, y, PUMP_RADIUS);
             }
             // crowded homes and shops breed crime: only the bigger buildings
             // reach their neighbours, so it adds up where the city is dense
@@ -572,7 +600,7 @@ void update_land() {
 
 // Recounts the city totals shown on the HUD and the stats screen.
 void count_city() {
-    res_levels = com_levels = ind_levels = road_count = plant_count = fire_station_count = police_station_count = 0;
+    res_levels = com_levels = ind_levels = road_count = plant_count = fire_station_count = police_station_count = pump_count = 0;
     for(int y = 0; y < MAP_H; y++) {
         for(int x = 0; x < MAP_W; x++) {
             switch(map[y][x]) {
@@ -583,6 +611,7 @@ void count_city() {
                 case TILE_POWER_PLANT: if(level[y][x] == 0) plant_count++; break; // count top-left quarters
                 case TILE_FIRE_STATION: fire_station_count++; break;
                 case TILE_POLICE_STATION: police_station_count++; break;
+                case TILE_WATER_PUMP: pump_count++; break;
                 default: break;
             }
         }
@@ -638,6 +667,8 @@ const size_t save32_sizes[5] = {
     offsetof(SaveData32, disasters), // 3
     sizeof(SaveData32),              // 4
 };
+
+void reset_moving_things(); // cars, tornado, earthquake: defined with them
 
 // When the city was last saved, to show "SAVED" on the HUD for a moment.
 uint32_t saved_time = 0;
@@ -713,6 +744,7 @@ bool load_city() {
     rank = save.rank >= 0 ? std::min(int(save.rank), RANK_CAPITAL) : rank_for(population);
     message = "";
     hint_step = HINT_DONE; // a saved city needs no tutorial
+    reset_moving_things();
     if(save.cursor_x >= 0 && save.cursor_x < MAP_W && save.cursor_y >= 0 && save.cursor_y < MAP_H) {
         view_at(Point(save.cursor_x, save.cursor_y));
     } else {
@@ -806,6 +838,7 @@ void new_city(bool tutorial) {
     rank = 0;
     message = "";
     hint_step = tutorial ? HINT_SCROLL : HINT_DONE;
+    reset_moving_things();
     center_view();
     count_city();
 }
@@ -876,9 +909,18 @@ bool update_fires() {
     return true;
 }
 
+// Set by simulate() when a zone could have grown but had no water; the
+// first time, the player gets a tip.
+bool needs_water = false;
+bool water_tip_shown = false;
+// Zones that wanted to grow last month but had no water: they blink a drop.
+bool thirsty[MAP_H][MAP_W];
+
 // One month of city life: zones next to roads grow when there is demand,
 // zones cut off from roads shrink.
 void simulate() {
+    needs_water = false;
+    memset(thirsty, 0, sizeof(thirsty));
     // count first, so every tile sees the same totals this month
     int res = 0, com = 0, ind = 0;
     for(int y = 0; y < MAP_H; y++) {
@@ -919,6 +961,7 @@ void simulate() {
             if(lv >= MAX_LEVEL || !powered[y][x]) {
                 continue; // full, or no electricity: nobody moves in
             }
+            bool dry = lv >= 1 && !watered[y][x]; // a first small building manages; bigger ones need water
             if(tile == TILE_RESIDENTIAL && pollution[y][x] >= POLLUTION_NO_GROWTH) {
                 continue; // too smoggy to move in
             }
@@ -931,6 +974,13 @@ void simulate() {
                 case TILE_RESIDENTIAL: demand = res_demand(res, com, ind) > 0; break;
                 case TILE_COMMERCIAL:  demand = com_demand(res, com) > 0; break;
                 case TILE_INDUSTRIAL:  demand = ind_demand(res, ind) > 0; break;
+            }
+            if(dry) {
+                if(demand) {
+                    thirsty[y][x] = true;
+                    needs_water = true;
+                }
+                continue;
             }
 
             // grow slowly and unevenly: a one in three chance each month,
@@ -948,7 +998,8 @@ void simulate() {
     int road_upkeep = road_count * ROAD_UPKEEP;
     int power_upkeep = plant_count * PLANT_UPKEEP;
     int service_upkeep = fire_station_count * FIRE_STATION_UPKEEP
-                       + police_station_count * POLICE_STATION_UPKEEP;
+                       + police_station_count * POLICE_STATION_UPKEEP
+                       + pump_count * PUMP_UPKEEP;
     last_income = taxes - road_upkeep - power_upkeep - service_upkeep;
     money += last_income;
 
@@ -970,6 +1021,7 @@ enum Sound {
     SOUND_MENU,
     SOUND_RANK,
     SOUND_FIRE,
+    SOUND_DISASTER,
 };
 
 void play(Sound sound) {
@@ -982,6 +1034,7 @@ void play(Sound sound) {
         {0, Waveform::TRIANGLE, 660,  40, 0x6000}, // menu
         {0, Waveform::SINE,    1046, 600, 0x8000}, // new rank: long bright note
         {0, Waveform::NOISE,    200, 500, 0x9000}, // fire: low roar
+        {0, Waveform::NOISE,     80, 1500, 0xa000}, // tornado, flood, earthquake: long rumble
     };
     const Note &n = notes[sound];
     AudioChannel &ch = channels[n.channel];
@@ -1314,6 +1367,232 @@ void render_budget() {
     }
 }
 
+// Day and night: a day lasts DAY_MS of real time. Night is a dark blue
+// veil over the map; street lamps, lit windows and car headlights shine
+// through it. Overlays switch it off so their colours stay readable.
+constexpr uint32_t DAY_MS = 48000;
+constexpr int NIGHT_DARKNESS = 120; // alpha of the veil at midnight
+
+int darkness(uint32_t time) {
+    uint32_t t = time % DAY_MS;
+    const uint32_t dusk = 28000, night = 32000, dawn = 44000;
+    if(t < dusk) return 0;
+    if(t < night) return int((t - dusk) * NIGHT_DARKNESS / (night - dusk));
+    if(t < dawn) return NIGHT_DARKNESS;
+    return int((DAY_MS - t) * NIGHT_DARKNESS / (DAY_MS - dawn));
+}
+
+// Where the lamps are in a road sprite (see assets/tiles.png): straight
+// roads have one on each sidewalk, other roads one on the top-left corner.
+int road_lamps(int mask, Point lamps[2]) {
+    bool horizontal = (mask & (2 | 8)) && !(mask & (1 | 4));
+    bool vertical = (mask & (1 | 4)) && !(mask & (2 | 8));
+    if(horizontal) { lamps[0] = Point(1, 0); lamps[1] = Point(5, 7); return 2; }
+    if(vertical)   { lamps[0] = Point(0, 1); lamps[1] = Point(7, 5); return 2; }
+    lamps[0] = Point(0, 0);
+    return 1;
+}
+
+// Traffic: cars drive along the roads, on the right, picking a random
+// turn at each crossing. More people and more roads mean more cars.
+constexpr int MAX_CARS = 24;
+constexpr uint32_t CAR_STEP_MS = 60; // one pixel per step
+struct Car {
+    int16_t x, y;   // map pixels; tile centres are tile * 8 + 4
+    int8_t dx, dy;  // heading, one of the four directions
+    uint8_t colour;
+};
+Car cars[MAX_CARS];
+int car_count = 0;
+uint32_t next_car_step = 0;
+const Pen car_colours[4] = {Pen(220, 50, 50), Pen(240, 240, 240), Pen(60, 110, 230), Pen(250, 200, 40)};
+
+bool is_road(int x, int y) {
+    return x >= 0 && y >= 0 && x < MAP_W && y < MAP_H && map[y][x] == TILE_ROAD;
+}
+
+int wanted_cars() {
+    if(population == 0) return 0;
+    return std::min(MAX_CARS, std::min(road_count / 6, population / 40 + 1));
+}
+
+// A new car on a random road tile, heading to a random neighbouring road.
+void spawn_car() {
+    for(int tries = 0; tries < 30; tries++) {
+        int tx = blit::random() % MAP_W, ty = blit::random() % MAP_H;
+        if(!is_road(tx, ty)) continue;
+        const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        int d = blit::random() % 4;
+        for(int i = 0; i < 4; i++) {
+            const int *dir = dirs[(d + i) % 4];
+            if(is_road(tx + dir[0], ty + dir[1])) {
+                cars[car_count++] = Car{int16_t(tx * TILE_SIZE + 4), int16_t(ty * TILE_SIZE + 4),
+                                        int8_t(dir[0]), int8_t(dir[1]), uint8_t(blit::random() % 4)};
+                return;
+            }
+        }
+    }
+}
+
+void update_traffic(uint32_t time) {
+    int wanted = wanted_cars();
+    if(car_count < wanted) spawn_car();
+    if(car_count > wanted) car_count = wanted;
+    if(time < next_car_step) return;
+    next_car_step = time + CAR_STEP_MS;
+
+    for(int i = 0; i < car_count; i++) {
+        Car &c = cars[i];
+        if(c.x % TILE_SIZE == 4 && c.y % TILE_SIZE == 4) {
+            // at a tile centre: pick the way on, never straight back unless
+            // it's a dead end
+            int tx = c.x / TILE_SIZE, ty = c.y / TILE_SIZE;
+            if(!is_road(tx, ty)) {
+                cars[i--] = cars[--car_count]; // its road is gone
+                continue;
+            }
+            int options[4][2], n = 0;
+            const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for(auto &dir : dirs) {
+                if(dir[0] == -c.dx && dir[1] == -c.dy) continue;
+                if(is_road(tx + dir[0], ty + dir[1])) {
+                    options[n][0] = dir[0];
+                    options[n][1] = dir[1];
+                    n++;
+                }
+            }
+            if(n == 0) {
+                c.dx = -c.dx; c.dy = -c.dy; // dead end: turn round
+                if(!is_road(tx + c.dx, ty + c.dy)) continue; // a lone tile: wait
+            } else {
+                int pick = blit::random() % n;
+                c.dx = options[pick][0];
+                c.dy = options[pick][1];
+            }
+        }
+        c.x += c.dx;
+        c.y += c.dy;
+    }
+}
+
+// A car is 3 x 2 pixels in the right-hand lane. headlight is the pixel at
+// its front, lit at night.
+Rect car_rect(const Car &c, Point origin, Point *headlight) {
+    int px = origin.x + c.x, py = origin.y + c.y;
+    if(c.dx > 0) { *headlight = Point(px + 1, py + 1); return Rect(px - 1, py + 1, 3, 2); }
+    if(c.dx < 0) { *headlight = Point(px - 1, py - 3); return Rect(px - 1, py - 3, 3, 2); }
+    if(c.dy > 0) { *headlight = Point(px - 3, py + 1); return Rect(px - 3, py - 1, 2, 3); }
+    *headlight = Point(px + 1, py - 1);
+    return Rect(px + 1, py - 1, 2, 3);
+}
+
+// Disasters besides fire, once the city has some people and the tutorial
+// is over. Each kind strikes about once every DISASTER_ODDS months.
+constexpr int DISASTER_ODDS = 240;
+constexpr int DISASTER_MIN_POPULATION = 200;
+
+// A tornado wanders across the map for TORNADO_STEPS tiles and flattens
+// whatever it touches (bridges fall into the water).
+constexpr int TORNADO_STEPS = 18;
+constexpr uint32_t TORNADO_STEP_MS = 250;
+struct Tornado {
+    int steps_left = 0; // 0: no tornado
+    Point tile;
+    Point heading;
+    uint32_t next_step = 0;
+};
+Tornado tornado;
+
+// An earthquake shakes the screen until quake_end.
+uint32_t quake_end = 0;
+
+// Knocks down whatever stands on a tile.
+void flatten(int x, int y) {
+    uint8_t &tile = map[y][x];
+    if(tile == TILE_WATER || tile == TILE_GRASS) return;
+    if(tile == TILE_POWER_PLANT) {
+        int part = level[y][x];
+        int left = x - part % 2, top = y - part / 2;
+        for(int p = 0; p < 4; p++) {
+            map[top + p / 2][left + p % 2] = TILE_GRASS;
+            level[top + p / 2][left + p % 2] = 0;
+        }
+        return;
+    }
+    tile = (tile == TILE_ROAD && level[y][x]) ? TILE_WATER : TILE_GRASS;
+    level[y][x] = 0;
+    fire[y][x] = 0;
+}
+
+void update_tornado(uint32_t time) {
+    if(tornado.steps_left == 0 || speed == SPEED_PAUSED || time < tornado.next_step) return;
+    tornado.next_step = time + TORNADO_STEP_MS;
+    flatten(tornado.tile.x, tornado.tile.y);
+    // mostly straight on, sometimes a turn
+    if(blit::random() % 3 == 0) {
+        const Point turns[4] = {Point(1, 0), Point(-1, 0), Point(0, 1), Point(0, -1)};
+        tornado.heading = turns[blit::random() % 4];
+    }
+    tornado.tile += tornado.heading;
+    tornado.tile.x = std::max(0, std::min(MAP_W - 1, int(tornado.tile.x)));
+    tornado.tile.y = std::max(0, std::min(MAP_H - 1, int(tornado.tile.y)));
+    tornado.steps_left--;
+    update_power();
+    update_land();
+}
+
+// One roll a month. Returns the message to show, or nullptr.
+const char *maybe_disaster(uint32_t time) {
+    if(!disasters || population < DISASTER_MIN_POPULATION || hint_step < HINT_DONE) return nullptr;
+    int roll = blit::random() % DISASTER_ODDS;
+    if(roll == 0 && tornado.steps_left == 0) {
+        // start somewhere built up: a random road, so it hits the city
+        for(int tries = 0; tries < 50; tries++) {
+            int x = blit::random() % MAP_W, y = blit::random() % MAP_H;
+            if(map[y][x] != TILE_ROAD) continue;
+            tornado.tile = Point(x, y);
+            tornado.heading = Point(blit::random() % 2 ? 1 : -1, 0);
+            tornado.steps_left = TORNADO_STEPS;
+            tornado.next_step = time;
+            return "TORNADO! SEE MINIMAP";
+        }
+        return nullptr;
+    }
+    if(roll == 1) {
+        // flood: buildings by the water lose a level, one in two
+        bool hit = false;
+        for(int y = 0; y < MAP_H; y++) {
+            for(int x = 0; x < MAP_W; x++) {
+                if(is_zone(map[y][x]) && level[y][x] > 0 && next_to_water(x, y) && blit::random() % 2 == 0) {
+                    level[y][x]--;
+                    hit = true;
+                }
+            }
+        }
+        return hit ? "FLOOD BY THE WATER!" : nullptr;
+    }
+    if(roll == 2) {
+        // earthquake: one building in four loses a level, a few catch fire
+        for(int y = 0; y < MAP_H; y++) {
+            for(int x = 0; x < MAP_W; x++) {
+                if(!flammable(x, y)) continue;
+                if(blit::random() % 4 == 0) level[y][x]--;
+                if(level[y][x] > 0 && blit::random() % 30 == 0) fire[y][x] = BURN_MONTHS;
+            }
+        }
+        quake_end = time + 2000;
+        return "EARTHQUAKE!";
+    }
+    return nullptr;
+}
+
+void reset_moving_things() {
+    car_count = 0;
+    tornado.steps_left = 0;
+    quake_end = 0;
+    memset(thirsty, 0, sizeof(thirsty));
+}
+
 void render_city(uint32_t time);
 void render_won();
 void render_minimap(uint32_t time);
@@ -1402,11 +1681,18 @@ void render_city(uint32_t time) {
     int view_w = screen.bounds.w / TILE_SIZE;
     int view_h = screen.bounds.h / TILE_SIZE;
 
+    // an earthquake shakes the map (not the HUD) a pixel or two
+    Point shake(0, 0);
+    if(time < quake_end) {
+        shake = Point(int(time / 40 % 3) - 1, int(time / 60 % 3) - 1);
+    }
+
     // draw the visible part of the map
     for(int sy = 0; sy < view_h; sy++) {
         for(int sx = 0; sx < view_w; sx++) {
             int mx = camera.x + sx;
             int my = camera.y + sy;
+            Point pos(sx * TILE_SIZE + shake.x, sy * TILE_SIZE + shake.y);
 
             int sprite;
             switch(map[my][mx]) {
@@ -1434,16 +1720,20 @@ void render_city(uint32_t time) {
                 case TILE_GRASS:
                 default:               sprite = SPRITE_GRASS; break;
             }
-            screen.sprite(sprite, Point(sx * TILE_SIZE, sy * TILE_SIZE));
+            screen.sprite(sprite, pos);
 
             // flames over burning buildings, flickering left and right
             if(fire[my][mx] > 0) {
-                screen.sprite(SPRITE_FIRE, Point(sx * TILE_SIZE, sy * TILE_SIZE),
+                screen.sprite(SPRITE_FIRE, pos,
                               (time / 200) % 2 ? SpriteTransform::HORIZONTAL : SpriteTransform::NONE);
             }
-            // zones without power blink a bolt, half a second on, half off
+            // zones without power blink a bolt, half a second on, half off;
+            // built-up zones without water blink a drop in the other half
             else if(is_zone(map[my][mx]) && !powered[my][mx] && (time / 500) % 2 == 0) {
-                screen.sprite(SPRITE_NO_POWER, Point(sx * TILE_SIZE, sy * TILE_SIZE));
+                screen.sprite(SPRITE_NO_POWER, pos);
+            }
+            else if(is_zone(map[my][mx]) && thirsty[my][mx] && !watered[my][mx] && (time / 500) % 2 == 1) {
+                screen.sprite(SPRITE_NO_WATER, pos);
             }
 
             // overlay: a see-through colour on every tile
@@ -1464,7 +1754,57 @@ void render_city(uint32_t time) {
             } else if(overlay == OVERLAY_CRIME && crime[my][mx] > 0) {
                 screen.pen = Pen(230, 0, 0, std::min(220, crime[my][mx] * 3));
                 screen.rectangle(r);
+            } else if(overlay == OVERLAY_WATER && watered[my][mx]) {
+                screen.pen = Pen(40, 120, 255, 120);
+                screen.rectangle(r);
             }
+        }
+    }
+
+    // cars, then the tornado, on top of the tiles
+    Point origin(shake.x - camera.x * TILE_SIZE, shake.y - camera.y * TILE_SIZE);
+    Point headlights[MAX_CARS];
+    for(int i = 0; i < car_count; i++) {
+        screen.pen = car_colours[cars[i].colour];
+        screen.rectangle(car_rect(cars[i], origin, &headlights[i]));
+    }
+    if(tornado.steps_left > 0) {
+        Point p = origin + Point(tornado.tile.x * TILE_SIZE, tornado.tile.y * TILE_SIZE);
+        screen.sprite(SPRITE_TORNADO + (time / 120) % 2, p);
+    }
+
+    // night: the veil, then the lights that shine through it
+    int dark = overlay == OVERLAY_NONE ? darkness(time) : 0;
+    if(dark > 0) {
+        screen.pen = Pen(5, 5, 35, dark);
+        screen.rectangle(Rect(0, 0, screen.bounds.w, screen.bounds.h));
+        for(int sy = 0; sy < view_h; sy++) {
+            for(int sx = 0; sx < view_w; sx++) {
+                int mx = camera.x + sx, my = camera.y + sy;
+                Point pos(sx * TILE_SIZE + shake.x, sy * TILE_SIZE + shake.y);
+                if(map[my][mx] == TILE_ROAD && !level[my][mx]) {
+                    Point lamps[2];
+                    int n = road_lamps(road_mask(mx, my), lamps);
+                    for(int i = 0; i < n; i++) {
+                        Point l = pos + lamps[i];
+                        screen.pen = Pen(255, 210, 110, dark / 2); // a soft pool of light
+                        screen.rectangle(Rect(l.x - 1, l.y - 1, 3, 3));
+                        screen.pen = Pen(255, 245, 190);
+                        screen.pixel(l);
+                    }
+                } else if(is_zone(map[my][mx]) && level[my][mx] > 0 && powered[my][mx]) {
+                    // lit windows; not every building, so the city twinkles
+                    if((mx * 7 + my * 3) % 3 != 0) {
+                        screen.pen = Pen(255, 220, 100);
+                        screen.pixel(pos + Point(2 + (mx + my) % 3, 4));
+                        if(level[my][mx] >= 2) screen.pixel(pos + Point(5, 3));
+                    }
+                }
+            }
+        }
+        screen.pen = Pen(255, 250, 200);
+        for(int i = 0; i < car_count; i++) {
+            screen.pixel(headlights[i]);
         }
     }
 
@@ -1587,6 +1927,7 @@ Pen minimap_colour(int x, int y) {
         case TILE_POLICE_STATION: return Pen(40, 70, 200);
         case TILE_TREES:          return Pen(10, 45, 15);
         case TILE_WATER:          return Pen(40, 90, 190);
+        case TILE_WATER_PUMP:     return Pen(140, 200, 255);
         default:                  return Pen(20, 70, 20); // grass
     }
 }
@@ -1610,6 +1951,12 @@ void render_minimap(uint32_t time) {
         screen.rectangle(Rect(frame.x, frame.y + frame.h - 1, frame.w, 1));
         screen.rectangle(Rect(frame.x, frame.y, 1, frame.h));
         screen.rectangle(Rect(frame.x + frame.w - 1, frame.y, 1, frame.h));
+    }
+
+    // a tornado shows as a blinking white dot
+    if(tornado.steps_left > 0 && (time / 200) % 2 == 0) {
+        screen.pen = Pen(255, 255, 255);
+        screen.rectangle(Rect(tornado.tile.x * MINIMAP_DOT - 1, tornado.tile.y * MINIMAP_DOT - 1, 4, 4));
     }
 
     label("A: GO  B: BACK", Point(0, screen.bounds.h), TextAlign::bottom_left);
@@ -1741,7 +2088,10 @@ void update_pause() {
     bool on_disasters = menu_choice == PAUSE_DISASTERS;
     if(on_disasters && (buttons.pressed & (Button::A | Button::DPAD_LEFT | Button::DPAD_RIGHT))) {
         disasters = !disasters;
-        if(!disasters) memset(fire, 0, sizeof(fire)); // off means off: put out every fire
+        if(!disasters) {
+            memset(fire, 0, sizeof(fire)); // off means off: put out every fire
+            tornado.steps_left = 0;
+        }
     }
     bool on_music = menu_choice == PAUSE_MUSIC;
     if(on_music && (buttons.pressed & (Button::A | Button::DPAD_LEFT | Button::DPAD_RIGHT))) {
@@ -1815,6 +2165,9 @@ void use_tool(uint32_t time, bool tapped) {
         case TOOL_POLICE_STATION:
             if(tile == TILE_GRASS) tile = TILE_POLICE_STATION;
             break;
+        case TOOL_WATER_PUMP:
+            if(tile == TILE_GRASS && next_to_water(cursor.x, cursor.y)) tile = TILE_WATER_PUMP;
+            break;
         case TOOL_POWER_PLANT:
             // the cursor is the top-left of a 2x2 plant; all four tiles must be grass
             if(cursor.x < MAP_W - 1 && cursor.y < MAP_H - 1
@@ -1858,6 +2211,9 @@ void use_tool(uint32_t time, bool tapped) {
             message_time = time;
         } else if(before == TILE_WATER) {
             message = "ONLY ROADS GO ON WATER";
+            message_time = time;
+        } else if(before == TILE_GRASS && tool == TOOL_WATER_PUMP) {
+            message = "PUMPS GO BY WATER";
             message_time = time;
         }
     }
@@ -2072,6 +2428,9 @@ void update(uint32_t time) {
         scrolled = true; // the edge arrows did their job
     }
 
+    update_traffic(time);
+    update_tornado(time);
+
     // run the simulation once per game month
     if(speed == SPEED_PAUSED) {
         last_month_time = time;
@@ -2079,11 +2438,21 @@ void update(uint32_t time) {
         last_month_time = time;
         month++;
         bool new_fire = update_fires();
+        const char *disaster = maybe_disaster(time);
         simulate();
         if(new_fire) {
             message = "FIRE!";
             message_time = time;
             play(SOUND_FIRE);
+        }
+        if(disaster) {
+            message = disaster;
+            message_time = time;
+            play(SOUND_DISASTER);
+        } else if(needs_water && !water_tip_shown && hint_step == HINT_DONE) {
+            message = "TO GROW: WATER PUMP";
+            message_time = time;
+            water_tip_shown = true;
         }
 
         // a new rank: tell the player, and at the top rank show the win screen

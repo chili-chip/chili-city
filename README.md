@@ -8,6 +8,15 @@ A tiny SimCity-like city builder for the [VGC Zero](https://chilichip.eu) handhe
 
 Lay roads, zone land for homes, shops and factories, and watch the city grow month by month while you keep the budget out of the red.
 
+| | |
+|---|---|
+| ![A city by day](docs/screenshots/city-day.png) | ![The same city at night, with street lamps and lit windows](docs/screenshots/city-night.png) |
+| A busy city by day, with traffic | Night falls: lamps, windows and headlights |
+| ![The minimap of a new map: river, lakes and forests](docs/screenshots/minimap.png) | ![The tool bar, opened by holding B](docs/screenshots/tool-bar.png) |
+| Every map is new: river, lakes, forests | Hold B for the tool bar |
+
+**Play it in the browser:** https://chili-chip.github.io/chili-city/
+
 **Goal:** grow your hamlet into a capital. Each rank is reached by population:
 
 | Rank | Population |
@@ -32,7 +41,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
   - **Commercial** grows when there are enough residents to shop.
   - **Industrial** grows when there are enough residents to work, and pollutes the tiles around it: the bigger the factory, the further the smog reaches. Homes in smog stop growing, and in heavy smog they shrink.
   - **Parks** raise land value around them. Homes on high land value grow faster.
-  - Press **X** to look at the pollution, land value or crime overlay.
+  - Press **X** to look at the pollution, land value, crime or water overlay.
 - The **R C I** meter in the bottom-left corner shows demand: a green bar up means the city wants more of that zone, a red bar down means it has too much.
 - You start with **$5000**. Building costs money:
 
@@ -46,10 +55,19 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
   | Park | $20 |
   | Fire station | $500 |
   | Police station | $500 |
+  | Water pump | $300 |
   | Bulldoze | $5 |
 
-- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile, $50 per power plant and $20 per fire or police station.
-- Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Disasters can be turned off in the pause menu.
+- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile, $50 per power plant, $20 per fire or police station and $10 per water pump.
+- **Water.** A zone grows its first small building without water, but bigger buildings need it. A **water pump** must stand next to a lake or the river and supplies everything within 8 tiles. Zones that want to grow but have no water blink a blue drop. Press **X** until **WATER** shows to see what is supplied.
+- **Day and night.** A day lasts 48 seconds. At night the street lamps, lit windows and car headlights shine.
+- **Traffic.** Cars drive on the right and turn at random at crossings. The more people and roads, the more cars.
+- Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Once the city has 200 people, rarer disasters can strike too:
+  - a **tornado** wanders across the map and flattens what it touches (bridges fall into the water); the minimap shows where it is;
+  - a **flood** damages buildings next to the water;
+  - an **earthquake** shakes the city, damages one building in four and starts a few fires.
+
+  Disasters can be turned off in the pause menu.
 - **Crime** grows where homes and shops are crowded together. Homes don't grow in high crime, and crime lowers land value. A **police station** cuts crime to a quarter within 6 tiles.
 - The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
 - The game starts on a title screen: **CONTINUE** the saved city, start a **NEW CITY**, or start a new city with the **TUTORIAL**. When a city is saved, NEW CITY and TUTORIAL ask first, because the next save replaces the old city. In the pause menu you can set the speed (paused, normal or fast), open the budget, the minimap or the help, turn disasters or music off, or save and go back to the title.
@@ -68,7 +86,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
 | Next tool (tap) | B | X |
 | Tool bar: pick any tool, both ways | hold B, then left/right | hold X, then left/right |
 | Stats screen | Y | V |
-| Overlay: pollution, land value, crime, off | X | C |
+| Overlay: pollution, land value, crime, water, off | X | C |
 | Pause menu (speed, save and quit) | MENU | Esc |
 
 ## Building
