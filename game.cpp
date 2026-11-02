@@ -97,10 +97,16 @@ const int tool_costs[TOOL_COUNT] = {
     5,  // bulldozer
 };
 
-// A road built on water is a bridge: a TILE_ROAD with level 1, so it
-// joins roads like any other road and turns back into water when
-// bulldozed. It costs more than a road on land.
+// A road built on water is a bridge: a TILE_ROAD with the ROAD_BRIDGE
+// bit in its level, so it joins roads like any other road and turns back
+// into water when bulldozed. It costs more than a road on land.
 constexpr int BRIDGE_COST = 50;
+
+// A power line laid over a road (or a bridge) sets ROAD_WIRE in the road's
+// level: power then crosses the road, as it does in SimCity. Bulldozing
+// takes the wire off first, then the road.
+constexpr uint8_t ROAD_BRIDGE = 1;
+constexpr uint8_t ROAD_WIRE = 2;
 
 const char *tool_names[TOOL_COUNT] = {
     "ROAD",
@@ -348,6 +354,9 @@ struct Budget {
 Budget this_year, last_year;
 bool have_last_year = false; // false until a year ends after a new game or load
 
+// The debt tip shows once each time the money drops below zero.
+bool debt_tip_shown = false;
+
 // When the player last tried to build without enough money, to flash the HUD.
 uint32_t broke_time = 0;
 bool was_broke = false;
@@ -575,10 +584,10 @@ const char *help_text[HELP_PAGES][11] = {
         "BY A LAKE OR RIVER.",
         "A PLANT POWERS ZONES",
         "LINKED BY LINES OR",
-        "BY OTHER ZONES.",
+        "BUILDINGS. LINES CAN",
+        "CROSS ROADS.",
         "R C I: GREEN = WANTED,",
         "RED = TOO MUCH.",
-        "X: LAND VALUE, WATER..",
     },
     {
         "TIPS            3/4",
@@ -589,7 +598,7 @@ const char *help_text[HELP_PAGES][11] = {
         "FIRE AND POLICE",
         "STATIONS GUARD 6 TILES",
         "HIGH TAX SLOWS GROWTH",
-        "BULLDOZE TREES FIRST",
+        "IN DEBT? RAISE TAX",
         "ROAD ON WATER: BRIDGE",
         "GOAL: 10000 PEOPLE",
     },
@@ -713,21 +722,55 @@ bool is_zone(uint8_t tile) {
     return tile == TILE_RESIDENTIAL || tile == TILE_COMMERCIAL || tile == TILE_INDUSTRIAL;
 }
 
-// Power flows through power lines, plants and zones (zones pass it on to
-// the zone next door), but not through roads or grass.
-bool carries_power(uint8_t tile) {
-    return tile == TILE_POWER_LINE || tile == TILE_POWER_PLANT || is_zone(tile);
+// Buildings a player puts in the middle of a block. They pass power on
+// like zones, so a school or a fire station doesn't cut the homes behind
+// it off.
+bool is_service(uint8_t tile) {
+    return tile == TILE_FIRE_STATION || tile == TILE_POLICE_STATION || tile == TILE_WATER_PUMP
+        || tile == TILE_SCHOOL || tile == TILE_HOSPITAL;
+}
+
+// Power flows through power lines, plants, zones and services (each passes
+// it on to the tile next door) and over roads that have a power line laid
+// across them, but not through bare roads, parks, trees, water or grass.
+bool carries_power(int x, int y) {
+    uint8_t tile = map[y][x];
+    return tile == TILE_POWER_LINE || tile == TILE_POWER_PLANT || is_zone(tile) || is_service(tile)
+        || (tile == TILE_ROAD && (level[y][x] & ROAD_WIRE));
 }
 
 // Which neighbours carry power, as bits like road_mask, so a power line
 // sprite connects to them.
 int power_mask(int x, int y) {
     int mask = 0;
-    if(y > 0         && carries_power(map[y - 1][x])) mask |= 1;
-    if(x < MAP_W - 1 && carries_power(map[y][x + 1])) mask |= 2;
-    if(y < MAP_H - 1 && carries_power(map[y + 1][x])) mask |= 4;
-    if(x > 0         && carries_power(map[y][x - 1])) mask |= 8;
+    if(y > 0         && carries_power(x, y - 1)) mask |= 1;
+    if(x < MAP_W - 1 && carries_power(x + 1, y)) mask |= 2;
+    if(y < MAP_H - 1 && carries_power(x, y + 1)) mask |= 4;
+    if(x > 0         && carries_power(x - 1, y)) mask |= 8;
     return mask;
+}
+
+// Where a 2x2 plant goes for the cursor at (x, y): the cursor is its
+// top-left if the plant fits there, else the plant shifts left and/or up
+// so it still covers the cursor. False if no 2x2 of grass covers it.
+bool plant_fits(int left, int top) {
+    if(left < 0 || top < 0 || left >= MAP_W - 1 || top >= MAP_H - 1) return false;
+    for(int part = 0; part < 4; part++) {
+        if(map[top + part / 2][left + part % 2] != TILE_GRASS) return false;
+    }
+    return true;
+}
+bool plant_spot(int x, int y, Point &top_left) {
+    const Point shifts[4] = {Point(0, 0), Point(-1, 0), Point(0, -1), Point(-1, -1)};
+    for(auto &shift : shifts) {
+        if(plant_fits(x + shift.x, y + shift.y)) {
+            top_left = Point(x + shift.x, y + shift.y);
+            return true;
+        }
+    }
+    // nowhere: the preview stays on the cursor, kept on the map
+    top_left = Point(std::min(x, MAP_W - 2), std::min(y, MAP_H - 2));
+    return false;
 }
 
 // Flood fill from every power plant through connected tiles that carry
@@ -755,7 +798,7 @@ void update_power() {
         for(auto &step : steps) {
             Point n = p + step;
             if(n.x < 0 || n.y < 0 || n.x >= MAP_W || n.y >= MAP_H) continue;
-            if(powered[n.y][n.x] || !carries_power(map[n.y][n.x])) continue;
+            if(powered[n.y][n.x] || !carries_power(n.x, n.y)) continue;
             powered[n.y][n.x] = true;
             todo[count++] = n.y * MAP_W + n.x;
         }
@@ -807,7 +850,7 @@ void update_land() {
                 spread(pollution, x, y, level[y][x] * 40, 20);
             } else if(map[y][x] == TILE_PARK) {
                 spread(park_bonus, x, y, 30, 10);
-            } else if(map[y][x] == TILE_TREES || map[y][x] == TILE_WATER || (map[y][x] == TILE_ROAD && level[y][x])) {
+            } else if(map[y][x] == TILE_TREES || map[y][x] == TILE_WATER || (map[y][x] == TILE_ROAD && (level[y][x] & ROAD_BRIDGE))) {
                 // nature is nice to live by: +10 next door
                 spread(park_bonus, x, y, 20, 10);
             } else if(map[y][x] == TILE_FIRE_STATION) {
@@ -1901,7 +1944,7 @@ void flatten(int x, int y) {
         }
         return;
     }
-    tile = (tile == TILE_ROAD && level[y][x]) ? TILE_WATER : TILE_GRASS;
+    tile = (tile == TILE_ROAD && (level[y][x] & ROAD_BRIDGE)) ? TILE_WATER : TILE_GRASS;
     level[y][x] = 0;
     fire[y][x] = 0;
 }
@@ -2264,7 +2307,7 @@ void render_city(uint32_t time) {
             int sprite;
             switch(map[my][mx]) {
                 case TILE_ROAD:
-                    if(level[my][mx]) {
+                    if(level[my][mx] & ROAD_BRIDGE) {
                         // a bridge runs north-south when it only joins roads that way
                         int mask = road_mask(mx, my);
                         bool north_south = (mask & (1 | 4)) && !(mask & (2 | 8));
@@ -2293,6 +2336,19 @@ void render_city(uint32_t time) {
                 default:               sprite = SPRITE_GRASS; break;
             }
             screen.sprite(sprite, pos);
+
+            // a power line across a road: a dark wire from the middle
+            // towards each neighbour that carries power, and a pole
+            if(map[my][mx] == TILE_ROAD && (level[my][mx] & ROAD_WIRE)) {
+                int mask = power_mask(mx, my);
+                screen.pen = Pen(30, 30, 30);
+                if(mask & 1) screen.rectangle(Rect(pos.x + 4, pos.y, 1, 4));
+                if(mask & 4) screen.rectangle(Rect(pos.x + 4, pos.y + 3, 1, 5));
+                if(mask & 2) screen.rectangle(Rect(pos.x + 4, pos.y + 3, 4, 1));
+                if(mask & 8) screen.rectangle(Rect(pos.x, pos.y + 3, 5, 1));
+                screen.pen = Pen(120, 80, 40);
+                screen.pixel(pos + Point(4, 3));
+            }
 
             // flames over burning buildings, flickering left and right
             if(fire[my][mx] > 0) {
@@ -2375,7 +2431,7 @@ void render_city(uint32_t time) {
             for(int sx = 0; sx < view_w; sx++) {
                 int mx = camera.x + sx, my = camera.y + sy;
                 Point pos(sx * TILE_SIZE + shake.x, sy * TILE_SIZE + shake.y);
-                if(map[my][mx] == TILE_ROAD && !level[my][mx]) {
+                if(map[my][mx] == TILE_ROAD && !(level[my][mx] & ROAD_BRIDGE)) {
                     Point lamps[2];
                     int n = road_lamps(road_mask(mx, my), lamps);
                     for(int i = 0; i < n; i++) {
@@ -2415,9 +2471,17 @@ void render_city(uint32_t time) {
     Pen bright = season == SEASON_WINTER ? Pen(30, 30, 90) : Pen(255, 255, 255);
     screen.pen = pulse ? bright : Pen(255, 200, 0);
     int grow = pulse ? 1 : 0;
-    int px = (cursor.x - camera.x) * TILE_SIZE - grow;
-    int py = (cursor.y - camera.y) * TILE_SIZE - grow;
-    int size = TILE_SIZE + 2 * grow;
+    // with the plant tool the frame is 2x2, where the plant would go; red
+    // when there is no room for it
+    Point frame_tile = cursor;
+    int tiles = 1;
+    if(tool == TOOL_POWER_PLANT && tool_unlocked(tool)) {
+        if(!plant_spot(cursor.x, cursor.y, frame_tile)) screen.pen = Pen(255, 60, 60);
+        tiles = 2;
+    }
+    int px = (frame_tile.x - camera.x) * TILE_SIZE - grow;
+    int py = (frame_tile.y - camera.y) * TILE_SIZE - grow;
+    int size = tiles * TILE_SIZE + 2 * grow;
     screen.rectangle(Rect(px, py, size, 1));            // top
     screen.rectangle(Rect(px, py + size - 1, size, 1)); // bottom
     screen.rectangle(Rect(px, py, 1, size));            // left
@@ -2827,15 +2891,20 @@ void use_tool(uint32_t time, bool tapped) {
     }
     uint8_t &tile = map[cursor.y][cursor.x];
     uint8_t before = tile;
+    bool plant_built = false; // the plant can go next to the cursor tile
     uint8_t before_level = level[cursor.y][cursor.x];
     int cost = tool_costs[tool];
     bool bridge = tool == TOOL_ROAD && tile == TILE_WATER;
     if(bridge) cost = BRIDGE_COST;
     if(demolition) cost = 0; // wreck and rebuild for free
-    if(money < cost) {
+    // the bulldozer always works, free when the money has run out, so a
+    // city in debt can still knock down what it can't afford to run
+    if(tool == TOOL_BULLDOZER && money < cost) cost = 0;
+    if(cost > 0 && money < cost) {
         was_broke = true;
         broke_time = time;
         play(SOUND_BROKE);
+        if(tapped) show_message(money < 0 ? "IN DEBT: RAISE TAXES" : "NOT ENOUGH MONEY", time);
         return;
     }
     switch(tool) {
@@ -2858,6 +2927,7 @@ void use_tool(uint32_t time, bool tapped) {
             break;
         case TOOL_POWER_LINE:
             if(tile == TILE_GRASS) tile = TILE_POWER_LINE;
+            if(tile == TILE_ROAD) level[cursor.y][cursor.x] |= ROAD_WIRE; // across the road
             break;
         case TOOL_PARK:
             if(tile == TILE_GRASS) tile = TILE_PARK;
@@ -2877,22 +2947,30 @@ void use_tool(uint32_t time, bool tapped) {
         case TOOL_WATER_PUMP:
             if(tile == TILE_GRASS && next_to_water(cursor.x, cursor.y)) tile = TILE_WATER_PUMP;
             break;
-        case TOOL_POWER_PLANT:
-            // the cursor is the top-left of a 2x2 plant; all four tiles must be grass
-            if(cursor.x < MAP_W - 1 && cursor.y < MAP_H - 1
-               && map[cursor.y][cursor.x] == TILE_GRASS && map[cursor.y][cursor.x + 1] == TILE_GRASS
-               && map[cursor.y + 1][cursor.x] == TILE_GRASS && map[cursor.y + 1][cursor.x + 1] == TILE_GRASS) {
+        case TOOL_POWER_PLANT: {
+            // a 2x2 plant on four grass tiles, covering the cursor (the
+            // frame on the map shows where it goes)
+            Point top_left;
+            if(plant_spot(cursor.x, cursor.y, top_left)) {
                 for(int part = 0; part < 4; part++) {
-                    map[cursor.y + part / 2][cursor.x + part % 2] = TILE_POWER_PLANT;
-                    level[cursor.y + part / 2][cursor.x + part % 2] = part;
+                    map[top_left.y + part / 2][top_left.x + part % 2] = TILE_POWER_PLANT;
+                    level[top_left.y + part / 2][top_left.x + part % 2] = part;
                 }
+                plant_built = true;
+            } else if(tapped) {
+                show_message("PLANT NEEDS 2X2 GRASS", time);
             }
             break;
+        }
         case TOOL_BULLDOZER:
             if(tile == TILE_WATER) {
                 break; // lakes stay
             }
-            if(tile == TILE_ROAD && level[cursor.y][cursor.x]) {
+            if(tile == TILE_ROAD && (level[cursor.y][cursor.x] & ROAD_WIRE)) {
+                level[cursor.y][cursor.x] &= ~ROAD_WIRE; // the wire comes off first
+                break;
+            }
+            if(tile == TILE_ROAD && (level[cursor.y][cursor.x] & ROAD_BRIDGE)) {
                 tile = TILE_WATER; // a bridge comes down into the water
                 level[cursor.y][cursor.x] = 0;
                 break;
@@ -2914,7 +2992,7 @@ void use_tool(uint32_t time, bool tapped) {
         default:
             break;
     }
-    if(tile == before && tapped && tool != TOOL_BULLDOZER) {
+    if(tile == before && tapped && tool != TOOL_BULLDOZER && tool != TOOL_POWER_PLANT) {
         if(before == TILE_TREES) {
             show_message("BULLDOZE TREES FIRST", time);
         } else if(before == TILE_WATER) {
@@ -2924,7 +3002,7 @@ void use_tool(uint32_t time, bool tapped) {
         }
     }
     // only pay when something actually changed
-    if(tile != before || level[cursor.y][cursor.x] != before_level) {
+    if(tile != before || level[cursor.y][cursor.x] != before_level || plant_built) {
         money -= cost;
         play(tool == TOOL_BULLDOZER ? SOUND_BULLDOZE : SOUND_BUILD);
 
@@ -3165,6 +3243,15 @@ void update(uint32_t time) {
         simulate();
         if(demolition) {
             money = DEMOLITION_MONEY;
+        }
+        // in debt nothing can be built: say once how to get out of it
+        if(money < 0 && !debt_tip_shown) {
+            show_message("IN DEBT! RAISE TAXES", time);
+            show_message("MENU > BUDGET", time);
+            play(SOUND_BROKE);
+            debt_tip_shown = true;
+        } else if(money >= 0) {
+            debt_tip_shown = false;
         }
         if(new_fire) {
             show_message("FIRE!", time);
