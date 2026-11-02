@@ -14,19 +14,27 @@ Lay roads, zone land for homes, shops and factories, and watch the city grow mon
 | A busy city by day, with traffic | Night falls: lamps, windows and headlights |
 | ![The minimap of a new map: river, lakes and forests](docs/screenshots/minimap.png) | ![The tool bar, opened by holding B](docs/screenshots/tool-bar.png) |
 | Every map is new: river, lakes, forests | Hold B for the tool bar |
+| ![A snowy town with a frozen lake in winter](docs/screenshots/winter.png) | ![A flood in demolition mode](docs/screenshots/demolition-flood.png) |
+| Seasons: snow and ice in winter | Demolition mode: wreck a ready-made city |
+| ![The trophies screen](docs/screenshots/trophies.png) | |
+| 18 trophies to win | |
 
 **Play it in the browser:** https://chili-chip.github.io/chili-city/
 
-**Goal:** grow your hamlet into a capital. Each rank is reached by population:
+**Goal:** grow your hamlet into a capital. Each new rank is a new name for your city, reached by population, and two of them unlock a building:
 
-| Rank | Population |
-|---|---|
-| Village | 500 |
-| Town | 2000 |
-| City | 5000 |
-| Capital | 10000 |
+| Rank | Population | Unlocks |
+|---|---|---|
+| Hamlet | 0 | |
+| Small village | 150 | |
+| Village | 500 | School |
+| Small town | 1000 | |
+| Town | 2000 | Hospital |
+| City | 5000 | |
+| Big city | 7500 | |
+| Capital | 10000 | |
 
-Reaching Capital wins the game; you can keep building afterwards. Your rank shows on the stats screen (Y).
+Reaching Capital wins the game; you can keep building afterwards. Your rank shows on the stats screen (Y). A city saved by an older version keeps its rank under the new names.
 
 ## How to play
 
@@ -56,10 +64,16 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
   | Fire station | $500 |
   | Police station | $500 |
   | Water pump | $300 |
+  | School (from Village) | $400 |
+  | Hospital (from Town) | $800 |
   | Bulldoze | $5 |
 
-- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile, $50 per power plant, $20 per fire or police station and $10 per water pump.
+- Every month you collect taxes from residents and businesses and pay upkeep: $1 per road tile, $50 per power plant, $20 per fire or police station, $10 per water pump, $15 per school and $30 per hospital.
 - **Water.** A zone grows its first small building without water, but bigger buildings need it. A **water pump** must stand next to a lake or the river and supplies everything within 8 tiles. Zones that want to grow but have no water blink a blue drop. Press **X** until **WATER** shows to see what is supplied.
+- **Schools and hospitals.** Homes within 7 tiles of a **school** grow faster (as fast as on good land). Homes reach their top level only within 8 tiles of a **hospital**. Both stay locked, with a padlock in the tool bar, until the city is big enough (see the ranks above); a tap of B skips locked tools, and the city says when one opens.
+- **Seasons.** The months bring seasons: snow and frozen lakes in winter (December to February), flowers in spring, orange leaves in autumn. Frozen water doesn't flood.
+- **Trophies.** 18 goals to win, like the first bridge, 1000 people or a fire put out by a station. A trophy pops up when you win it and stays won for good, in every city (save slot 1). **TROPHIES** in the pause menu lists them all.
+- **Demolition mode.** **DEMOLITION** on the title screen opens three ready-made cities (a river town, a big crowded capital and a snowy town in the woods) to wreck. Pick a disaster in the pause menu (tornado, flood, earthquake or fire) and press A: it strikes at the cursor. Everything is unlocked, building is free and nothing is saved; QUIT TO TITLE brings back your own city as it was. No trophies are won there.
 - **Day and night.** A day lasts 48 seconds. At night the street lamps, lit windows and car headlights shine.
 - **Traffic.** Cars drive on the right and turn at random at crossings. The more people and roads, the more cars.
 - Now and then a building **catches fire**. Fire spreads to the buildings next door and burns them down to empty lots. A **fire station** puts out every fire within 6 tiles and makes new ones rarer there. Once the city has 200 people, rarer disasters can strike too:
@@ -70,7 +84,7 @@ Reaching Capital wins the game; you can keep building afterwards. Your rank show
   Disasters can be turned off in the pause menu.
 - **Crime** grows where homes and shops are crowded together. Homes don't grow in high crime, and crime lowers land value. A **police station** cuts crime to a quarter within 6 tiles.
 - The **BUDGET** screen in the pause menu shows last year's taxes and upkeep, and sets the **tax rate** (0–20%, default 7%). Higher taxes bring in more money but lower the demand for every zone; lower taxes do the opposite.
-- The game starts on a title screen: **CONTINUE** the saved city, start a **NEW CITY**, or start a new city with the **TUTORIAL**. When a city is saved, NEW CITY and TUTORIAL ask first, because the next save replaces the old city. In the pause menu you can set the speed (paused, normal or fast), open the budget, the minimap or the help, turn disasters or music off, or save and go back to the title.
+- The game starts on a title screen: **CONTINUE** the saved city, start a **NEW CITY**, or start a new city with the **TUTORIAL**. When a city is saved, NEW CITY and TUTORIAL ask first, because the next save replaces the old city. In the pause menu you can set the speed (paused, normal or fast), open the budget, the minimap, the trophies or the help, turn disasters or music off, or save and go back to the title.
 - You can only build on grass. Bulldoze first to replace something.
 - **Tutorial.** The very first launch opens on a start screen that says how long the tutorial takes (6 steps, about a minute) and lets you skip it (B). The tutorial is a box at the top of the screen with one step at a time: scroll the map, build a road, homes, a shop or factory, a power line and a power plant. Each step ends as soon as you have done it. The choice is remembered (save slot 1), so the start screen shows only once; **TUTORIAL** on the title screen plays it again in a new city. **HELP** in the pause menu has the controls and the rules.
 - **Saving.** The city saves when you quit the game (Quit to home or holding HOME on the VGC Zero, closing the window on a PC), when you pick SAVE + TITLE, and every January (a game year is 24 seconds at normal speed). Switching the console off is not caught, so the yearly autosave stays. The save keeps the map, money, date, tax rate, fires and where the cursor was; it is offered as **CONTINUE** on the title screen. The web build saves yearly and on SAVE + TITLE.
