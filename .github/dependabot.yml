@@ -1,11 +1,16 @@
 # Dependabot version updates: weekly PRs when a dependency has a new version.
 # Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuring-dependabot-version-updates
+# cooldown: a version update is proposed only once the release is 7 days old,
+# so a compromised release is usually caught before it reaches us. Security
+# updates ignore cooldown. https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference#cooldown-
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns:
