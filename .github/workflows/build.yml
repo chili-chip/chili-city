@@ -7,8 +7,11 @@ on:
   release:
     types: [published]
     
+# Read-only by default. Only `publish` may write: it attaches the files that
+# `build` made and runs no code from this repository, PyPI or the SDK.
+# https://docs.github.com/en/actions/reference/security/secure-use#use-the-principle-of-least-privilege
 permissions:
-  contents: write
+  contents: read
 
 env:
   BUILD_TYPE: Release
@@ -74,11 +77,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           path: main
 
       - name: Checkout 32Blit API
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: chili-chip/32blit-sdk
           path: 32blit-sdk
 
@@ -86,6 +91,7 @@ jobs:
         if: startsWith(matrix.name, 'VGC')
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: chili-chip/pico-sdk
           path: pico-sdk
           submodules: true
@@ -94,6 +100,7 @@ jobs:
         if: startsWith(matrix.name, 'VGC')
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: chili-chip/pico-extras
           path: pico-extras
 
@@ -141,7 +148,7 @@ jobs:
       - name: Configure CMake
         shell: bash
         working-directory: ${{runner.workspace}}/main/build
-        run: ${{matrix.cmake-prefix}} cmake $GITHUB_WORKSPACE/main -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCPACK_PACKAGE_FILE_NAME=${{env.RELEASE_FILE}} ${{matrix.cmake-args}}
+        run: ${{matrix.cmake-prefix}} cmake $GITHUB_WORKSPACE/main -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCPACK_PACKAGE_FILE_NAME=${RELEASE_FILE} ${{matrix.cmake-args}}
 
       - name: Build
         working-directory: ${{runner.workspace}}/main/build
@@ -181,21 +188,27 @@ jobs:
 
       - name: Upload tar
         if: github.event_name == 'release' && matrix.release-suffix != ''
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          files: ${{runner.workspace}}/main/build/${{env.RELEASE_FILE}}.tar.gz
+          name: release-${{ matrix.release-suffix }}-1
+          path: ${{runner.workspace}}/main/build/${{env.RELEASE_FILE}}.tar.gz
+          if-no-files-found: error
 
       - name: Upload zip
         if: github.event_name == 'release' && matrix.release-suffix != ''
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          files: ${{runner.workspace}}/main/build/${{env.RELEASE_FILE}}.zip
+          name: release-${{ matrix.release-suffix }}-2
+          path: ${{runner.workspace}}/main/build/${{env.RELEASE_FILE}}.zip
+          if-no-files-found: error
 
       - name: Upload .blit
         if: github.event_name == 'release' && matrix.name == 'VGC (.blit)'
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          files: ${{runner.workspace}}/main/build/*.blit
+          name: release-${{ matrix.release-suffix }}-3
+          path: ${{runner.workspace}}/main/build/*.blit
+          if-no-files-found: error
 
       - name: Rename HTML to index.html
         if: matrix.name == 'Emscripten' && github.ref == 'refs/heads/main'
@@ -237,3 +250,21 @@ jobs:
 
       - name: Deploy GitHub Pages
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # The only job that may write: it attaches the release files `build` made.
+  # It runs even when one platform failed, so the others still get published.
+  publish:
+    if: ${{ !cancelled() && github.event_name == 'release' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          files: release/*
